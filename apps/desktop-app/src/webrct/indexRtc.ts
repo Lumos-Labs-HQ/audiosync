@@ -4,6 +4,8 @@ export class WebRTCClient {
     private ws: WebSocket | null = null;
     private clientId: string;
     private onMessageCallback: (data: any) => void;
+    private fileChunks: Map<string, Array<ArrayBuffer>> = new Map();
+    private fileMetadata: Map<string, any> = new Map();
   
     constructor(clientId: string, onMessage: (data: any) => void) {
       this.clientId = clientId;
@@ -147,6 +149,8 @@ export class WebRTCClient {
     private setupDataChannel() {
       if (!this.dataChannel) return;
       
+      this.dataChannel.binaryType = 'arraybuffer';
+      
       this.dataChannel.onopen = () => {
         console.log('Data channel opened');
       };
@@ -156,8 +160,59 @@ export class WebRTCClient {
       };
       
       this.dataChannel.onmessage = (event) => {
-        const data = JSON.parse(event.data);
-        this.onMessageCallback(data);
+        if (typeof event.data === 'string') {
+          const data = JSON.parse(event.data);
+          
+          if (data.type === 'file-start') {
+            // Initialize file receiving
+            this.fileChunks.set(data.fileId, []);
+            this.fileMetadata.set(data.fileId, {
+              name: data.name,
+              type: data.type,
+              size: data.size,
+              totalChunks: data.totalChunks
+            });
+            return;
+          }
+          
+          if (data.type === 'file-end') {
+            // All chunks received, combine them into a file
+            const chunks = this.fileChunks.get(data.fileId) || [];
+            const metadata = this.fileMetadata.get(data.fileId);
+            
+            if (!chunks.length || !metadata) return;
+            
+            const fileBlob = new Blob(chunks, { type: metadata.type });
+            const file = new File([fileBlob], metadata.name, { type: metadata.type });
+            
+            // Clean up
+            this.fileChunks.delete(data.fileId);
+            this.fileMetadata.delete(data.fileId);
+            
+            // Notify with completed file
+            this.onMessageCallback({
+              type: 'file-received',
+              file: file,
+              index: data.index
+            });
+            return;
+          }
+          
+          // For non-file messages
+          this.onMessageCallback(data);
+        } else {
+          // Binary data (file chunk)
+          const data = event.data;
+          const header = new Uint8Array(data, 0, 36);
+          const fileId = new TextDecoder().decode(header.slice(0, 36));
+          const chunk = data.slice(36);
+          
+          // Add chunk to file
+          const chunks = this.fileChunks.get(fileId);
+          if (chunks) {
+            chunks.push(chunk);
+          }
+        }
       };
     }
     
@@ -167,6 +222,64 @@ export class WebRTCClient {
       } else {
         console.error('Data channel not open');
       }
+    }
+    
+    sendFile(file: File, index: number) {
+      if (!this.dataChannel || this.dataChannel.readyState !== 'open') {
+        console.error('Data channel not open');
+        return;
+      }
+      
+      const fileId = crypto.randomUUID();
+      const chunkSize = 16384; // 16KB chunks
+      const totalChunks = Math.ceil(file.size / chunkSize);
+      
+      // Send file metadata first
+      this.sendMessage({
+        type: 'file-start',
+        fileId: fileId,
+        name: file.name,
+        fileType: file.type,
+        size: file.size,
+        totalChunks: totalChunks,
+        index: index
+        });
+      
+      let offset = 0;
+      
+      // Function to send a chunk
+      const sendChunk = async () => {
+        if (offset >= file.size) {
+          // All chunks sent
+          this.sendMessage({
+            type: 'file-end',
+            fileId: fileId,
+            index: index
+          });
+          return;
+        }
+        
+        const chunk = file.slice(offset, offset + chunkSize);
+        const buffer = await chunk.arrayBuffer();
+        
+        // Create a header with the fileId
+        const headerBytes = new TextEncoder().encode(fileId);
+        
+        // Combine header and chunk
+        const combined = new Uint8Array(headerBytes.length + buffer.byteLength);
+        combined.set(headerBytes, 0);
+        combined.set(new Uint8Array(buffer), headerBytes.length);
+        
+        this.dataChannel!.send(combined.buffer);
+        
+        offset += chunkSize;
+        
+        // Wait a bit to prevent flooding the channel
+        setTimeout(sendChunk, 0);
+      };
+      
+      // Start sending chunks
+      sendChunk();
     }
     
     disconnect() {

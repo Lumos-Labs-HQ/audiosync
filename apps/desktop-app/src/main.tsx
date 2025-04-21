@@ -2,7 +2,6 @@ import { createRoot } from 'react-dom/client'
 import React, { useState, useEffect, useRef } from 'react'
 import './styles.css'
 import { WebRTCClient } from './webrct/indexRtc'
-import { AudioSync } from './webrct/audioSync'
 
 const App = () => {
   const [darkMode, setDarkMode] = useState(
@@ -12,11 +11,14 @@ const App = () => {
   const [clientId, setClientId] = useState('')
   const [targetId, setTargetId] = useState('')
   const [isConnected, setIsConnected] = useState(false)
-  const [isInitiator, setIsInitiator] = useState(false)
-  const [audioFile, setAudioFile] = useState<File | null>(null)
+  const [isHost, setIsHost] = useState(false)
+  const [playlist, setPlaylist] = useState<File[]>([])
+  const [currentTrack, setCurrentTrack] = useState<number>(-1)
+  const [isLoading, setIsLoading] = useState(false)
+  const [loadingMessage, setLoadingMessage] = useState('')
   
   const webrtcRef = useRef<WebRTCClient | null>(null)
-  const audioSyncRef = useRef<AudioSync | null>(null)
+  const audioRef = useRef<HTMLAudioElement>(null)
   
   useEffect(() => {
     if (darkMode) {
@@ -26,6 +28,18 @@ const App = () => {
     }
     localStorage.setItem('darkMode', darkMode.toString())
   }, [darkMode])
+  
+  useEffect(() => {
+    if (audioRef.current && currentTrack >= 0 && playlist[currentTrack]) {
+      const url = URL.createObjectURL(playlist[currentTrack])
+      audioRef.current.src = url
+      audioRef.current.load()
+      
+      if (isHost) {
+        audioRef.current.play()
+      }
+    }
+  }, [currentTrack, playlist])
   
   const toggleDarkMode = () => {
     setDarkMode(!darkMode)
@@ -41,11 +55,8 @@ const App = () => {
     webrtcRef.current = new WebRTCClient(clientId, handleWebRtcMessage)
     webrtcRef.current.connect()
     
-    // Create AudioSync instance
-    audioSyncRef.current = new AudioSync(webrtcRef.current, isInitiator)
-    
-    // Connect to peer
-    if (isInitiator) {
+    // If host, initiate connection
+    if (isHost) {
       setTimeout(() => {
         webrtcRef.current?.createOffer(targetId)
       }, 1000)
@@ -55,33 +66,118 @@ const App = () => {
   }
   
   const handleWebRtcMessage = (data: any) => {
-    if (audioSyncRef.current) {
-      audioSyncRef.current.handlePeerMessage(data)
+    switch (data.type) {
+      case 'play':
+        if (audioRef.current) {
+          audioRef.current.currentTime = data.currentTime
+          audioRef.current.play()
+        }
+        break
+      case 'pause':
+        if (audioRef.current) audioRef.current.pause()
+        break
+      case 'seek':
+        if (audioRef.current) audioRef.current.currentTime = data.currentTime
+        break
+      case 'track':
+        setCurrentTrack(data.index)
+        break
+      case 'sync':
+        if (audioRef.current && Math.abs(audioRef.current.currentTime - data.currentTime) > 0.5) {
+          audioRef.current.currentTime = data.currentTime
+        }
+        break
+      case 'file-received':
+        // Add the received file to the playlist
+        setPlaylist(prev => [...prev, data.file])
+        setLoadingMessage('')
+        setIsLoading(false)
+        
+        // If it's the first track, play it
+        if (playlist.length === 0) {
+          setCurrentTrack(0)
+        }
+        break
     }
   }
   
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files.length > 0) {
-      const file = e.target.files[0]
-      setAudioFile(file)
+  const addToPlaylist = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files) {
+      const newFiles = Array.from(e.target.files)
+      setPlaylist(prev => [...prev, ...newFiles])
       
-      if (audioSyncRef.current) {
-        audioSyncRef.current.loadLocalAudio(file)
+      // If this is the first track added, select it
+      if (playlist.length === 0 && newFiles.length > 0) {
+        setCurrentTrack(0)
+      }
+      
+      // Send files to the other peer if we're the host
+      if (isHost && webrtcRef.current) {
+        newFiles.forEach((file, idx) => {
+          const fileIndex = playlist.length + idx
+          setIsLoading(true)
+          setLoadingMessage(`Sending ${file.name}...`)
+          webrtcRef.current?.sendFile(file, fileIndex)
+        })
       }
     }
   }
   
-  const handlePlay = () => {
-    if (audioSyncRef.current) {
-      audioSyncRef.current.play()
+  const playTrack = (index: number) => {
+    setCurrentTrack(index)
+    
+    if (isHost && webrtcRef.current) {
+      webrtcRef.current.sendMessage({
+        type: 'track',
+        index: index
+      })
     }
   }
   
-  const handlePause = () => {
-    if (audioSyncRef.current) {
-      audioSyncRef.current.pause()
+  useEffect(() => {
+    // Set up audio element event listeners for sync
+    if (audioRef.current && isHost) {
+      const syncInterval = setInterval(() => {
+        if (audioRef.current && !audioRef.current.paused && webrtcRef.current) {
+          webrtcRef.current.sendMessage({
+            type: 'sync',
+            currentTime: audioRef.current.currentTime
+          })
+        }
+      }, 1000)
+      
+      // Handle play events
+      audioRef.current.onplay = () => {
+        if (webrtcRef.current) {
+          webrtcRef.current.sendMessage({
+            type: 'play',
+            currentTime: audioRef.current?.currentTime || 0
+          })
+        }
+      }
+      
+      // Handle pause events
+      audioRef.current.onpause = () => {
+        if (webrtcRef.current) {
+          webrtcRef.current.sendMessage({
+            type: 'pause'
+          })
+        }
+      }
+      
+      // Handle seeking events
+      audioRef.current.onseeked = () => {
+        if (webrtcRef.current) {
+          webrtcRef.current.sendMessage({
+            type: 'seek',
+            currentTime: audioRef.current?.currentTime || 0
+          })
+        }
+      }
+      
+      return () => clearInterval(syncInterval)
     }
-  }
+  }, [isHost, isConnected])
 
   return (
     <div className="min-h-screen bg-white dark:bg-gray-900 text-gray-900 dark:text-white transition-colors duration-300">
@@ -125,12 +221,12 @@ const App = () => {
               <div className="flex items-center">
                 <input 
                   type="checkbox" 
-                  id="initiator" 
-                  checked={isInitiator}
-                  onChange={() => setIsInitiator(!isInitiator)}
+                  id="host" 
+                  checked={isHost}
+                  onChange={() => setIsHost(!isHost)}
                   className="mr-2"
                 />
-                <label htmlFor="initiator">I'm creating the room</label>
+                <label htmlFor="host">I'm the host (controls playback)</label>
               </div>
               
               <button 
@@ -144,61 +240,72 @@ const App = () => {
         ) : (
           <div className="bg-white dark:bg-gray-800 p-6 rounded-lg shadow-md">
             <h2 className="text-2xl mb-4">
-              Connected to {targetId}
+              {isHost ? 'Hosting Session' : 'Connected to Host'}
             </h2>
             
-            <div className="mb-4">
-              <label className="block mb-1">Select Audio File</label>
-              <input 
-                type="file" 
-                accept="audio/*" 
-                onChange={handleFileChange}
-                className="block w-full text-sm text-gray-500
-                  file:mr-4 file:py-2 file:px-4
-                  file:rounded-full file:border-0
-                  file:text-sm file:font-semibold
-                  file:bg-blue-50 file:text-blue-700
-                  hover:file:bg-blue-100
-                  dark:file:bg-gray-700 dark:file:text-gray-100"
-              />
-            </div>
-            
-            {audioFile && (
-              <div className="space-y-4">
-                <p>Playing: {audioFile.name}</p>
-                
-                <div className="flex space-x-2">
-                  <button 
-                    onClick={handlePlay}
-                    className="bg-green-500 hover:bg-green-600 text-white py-2 px-4 rounded"
-                  >
-                    Play
-                  </button>
-                  <button 
-                    onClick={handlePause}
-                    className="bg-red-500 hover:bg-red-600 text-white py-2 px-4 rounded"
-                  >
-                    Pause
-                  </button>
-                </div>
-                
-                <div>
-                  <audio 
-                    ref={(el) => {
-                      if (el && audioSyncRef.current) {
-                        // This links the audio element from AudioSync
-                        const audioEl = audioSyncRef.current.getAudioElement();
-                        if (audioEl) {
-                          el.srcObject = (audioEl as any).srcObject;
-                        }
-                      }
-                    }}
-                    controls
-                    className="w-full mt-4"
-                  />
-                </div>
+            {isLoading && (
+              <div className="mb-4 p-3 bg-yellow-100 dark:bg-yellow-900 rounded">
+                <p>{loadingMessage}</p>
               </div>
             )}
+            
+            {isHost && (
+              <div className="mb-4">
+                <label className="block mb-1">Add to Playlist</label>
+                <input 
+                  type="file" 
+                  accept="audio/*" 
+                  multiple
+                  onChange={addToPlaylist}
+                  className="block w-full text-sm text-gray-500
+                    file:mr-4 file:py-2 file:px-4
+                    file:rounded-full file:border-0
+                    file:text-sm file:font-semibold
+                    file:bg-blue-50 file:text-blue-700
+                    hover:file:bg-blue-100
+                    dark:file:bg-gray-700 dark:file:text-gray-100"
+                />
+              </div>
+            )}
+            
+            <div className="mb-6">
+              <h3 className="text-xl mb-2">Playlist</h3>
+              {playlist.length > 0 ? (
+                <ul className="divide-y divide-gray-200 dark:divide-gray-700">
+                  {playlist.map((file, index) => (
+                    <li 
+                      key={index}
+                      className={`py-2 px-1 cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-700 
+                        ${currentTrack === index ? 'bg-blue-100 dark:bg-blue-900' : ''}`}
+                      onClick={() => isHost && playTrack(index)}
+                    >
+                      {file.name}
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="text-gray-500">
+                  {isHost ? "No tracks added yet" : "Waiting for host to add tracks..."}
+                </p>
+              )}
+            </div>
+            
+            <div>
+              <h3 className="text-xl mb-2">Now Playing</h3>
+              {currentTrack >= 0 && playlist[currentTrack] ? (
+                <div>
+                  <p className="mb-2">{playlist[currentTrack].name}</p>
+                  <audio 
+                    ref={audioRef}
+                    controls
+                    className="w-full"
+                    controlsList={isHost ? undefined : "noplaybackrate"}
+                  />
+                </div>
+              ) : (
+                <p className="text-gray-500">No track selected</p>
+              )}
+            </div>
           </div>
         )}
       </div>
