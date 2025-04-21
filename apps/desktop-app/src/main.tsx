@@ -51,6 +51,8 @@ const App = () => {
       return
     }
     
+    console.log('Connecting as', isHost ? 'host' : 'client', 'with ID', clientId, 'to', targetId);
+    
     // Create WebRTC client
     webrtcRef.current = new WebRTCClient(clientId, handleWebRtcMessage)
     webrtcRef.current.connect()
@@ -58,6 +60,7 @@ const App = () => {
     // If host, initiate connection
     if (isHost) {
       setTimeout(() => {
+        console.log('Creating offer to', targetId);
         webrtcRef.current?.createOffer(targetId)
       }, 1000)
     }
@@ -88,6 +91,7 @@ const App = () => {
         }
         break
       case 'file-received':
+        console.log('File received in component:', data.file.name, 'size:', data.file.size);
         // Add the received file to the playlist
         setPlaylist(prev => [...prev, data.file])
         setLoadingMessage('')
@@ -104,6 +108,8 @@ const App = () => {
   const addToPlaylist = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files) {
       const newFiles = Array.from(e.target.files)
+      console.log('Adding files to playlist:', newFiles.map(f => f.name));
+      
       setPlaylist(prev => [...prev, ...newFiles])
       
       // If this is the first track added, select it
@@ -113,6 +119,8 @@ const App = () => {
       
       // Send files to the other peer if we're the host
       if (isHost && webrtcRef.current) {
+        console.log('Sending files to peer:', newFiles.map(f => f.name));
+        
         newFiles.forEach((file, idx) => {
           const fileIndex = playlist.length + idx
           setIsLoading(true)

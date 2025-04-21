@@ -4,8 +4,13 @@ export class WebRTCClient {
     private ws: WebSocket | null = null;
     private clientId: string;
     private onMessageCallback: (data: any) => void;
-    private fileChunks: Map<string, Array<ArrayBuffer>> = new Map();
-    private fileMetadata: Map<string, any> = new Map();
+    private fileTransfers: Map<string, {
+      chunks: Array<ArrayBuffer>,
+      metadata: any,
+      receivedChunks: number
+    }> = new Map();
+    private pendingFiles: Array<{file: File, index: number}> = [];
+    private isConnected: boolean = false;
   
     constructor(clientId: string, onMessage: (data: any) => void) {
       this.clientId = clientId;
@@ -153,133 +158,213 @@ export class WebRTCClient {
       
       this.dataChannel.onopen = () => {
         console.log('Data channel opened');
+        this.isConnected = true;
+        
+        // Process any pending files
+        if (this.pendingFiles.length > 0) {
+          console.log(`Processing ${this.pendingFiles.length} pending files`);
+          const filesToSend = [...this.pendingFiles];
+          this.pendingFiles = [];
+          
+          // Send each file with a small delay between them
+          filesToSend.forEach((item, idx) => {
+            setTimeout(() => {
+              this.sendFileNow(item.file, item.index);
+            }, idx * 100);
+          });
+        }
       };
       
       this.dataChannel.onclose = () => {
         console.log('Data channel closed');
+        this.isConnected = false;
       };
       
       this.dataChannel.onmessage = (event) => {
         if (typeof event.data === 'string') {
-          const data = JSON.parse(event.data);
-          
-          if (data.type === 'file-start') {
-            // Initialize file receiving
-            this.fileChunks.set(data.fileId, []);
-            this.fileMetadata.set(data.fileId, {
-              name: data.name,
-              type: data.type,
-              size: data.size,
-              totalChunks: data.totalChunks
-            });
-            return;
-          }
-          
-          if (data.type === 'file-end') {
-            // All chunks received, combine them into a file
-            const chunks = this.fileChunks.get(data.fileId) || [];
-            const metadata = this.fileMetadata.get(data.fileId);
+          try {
+            const data = JSON.parse(event.data);
+            console.log('Received message type:', data.type);
             
-            if (!chunks.length || !metadata) return;
-            
-            const fileBlob = new Blob(chunks, { type: metadata.type });
-            const file = new File([fileBlob], metadata.name, { type: metadata.type });
-            
-            // Clean up
-            this.fileChunks.delete(data.fileId);
-            this.fileMetadata.delete(data.fileId);
-            
-            // Notify with completed file
-            this.onMessageCallback({
-              type: 'file-received',
-              file: file,
-              index: data.index
-            });
-            return;
-          }
-          
-          // For non-file messages
-          this.onMessageCallback(data);
-        } else {
-          // Binary data (file chunk)
-          const data = event.data;
-          const header = new Uint8Array(data, 0, 36);
-          const fileId = new TextDecoder().decode(header.slice(0, 36));
-          const chunk = data.slice(36);
-          
-          // Add chunk to file
-          const chunks = this.fileChunks.get(fileId);
-          if (chunks) {
-            chunks.push(chunk);
+            switch (data.type) {
+              case 'file-start':
+                console.log('Receiving file:', data.name, 'size:', data.size);
+                this.fileTransfers.set(data.id, {
+                  chunks: [],
+                  metadata: {
+                    name: data.name,
+                    type: data.mimeType,
+                    size: data.size,
+                    totalChunks: data.totalChunks,
+                    index: data.index
+                  },
+                  receivedChunks: 0
+                });
+                break;
+                
+              case 'file-chunk':
+                if (this.fileTransfers.has(data.id)) {
+                  const transfer = this.fileTransfers.get(data.id)!;
+                  
+                  // The next chunk will be a binary message
+                  this.dataChannel!.onmessage = (binEvent) => {
+                    // Add the chunk to our array
+                    transfer.chunks.push(binEvent.data);
+                    transfer.receivedChunks++;
+                    
+                    console.log(`Received chunk ${transfer.receivedChunks}/${transfer.metadata.totalChunks}`);
+                    
+                    // Reset the message handler
+                    this.setupDataChannel();
+                    
+                    // If we've received all chunks, create the file
+                    if (transfer.receivedChunks === transfer.metadata.totalChunks) {
+                      this.createFileFromChunks(data.id);
+                    }
+                  };
+                }
+                break;
+                
+              case 'file-end':
+                // A safety check, but usually not needed with our approach
+                if (this.fileTransfers.has(data.id)) {
+                  this.createFileFromChunks(data.id);
+                }
+                break;
+                
+              default:
+                // All other messages get passed to the callback
+                this.onMessageCallback(data);
+            }
+          } catch (error) {
+            console.error('Error parsing message:', error, event.data);
           }
         }
       };
     }
     
+    private createFileFromChunks(fileId: string) {
+      const transfer = this.fileTransfers.get(fileId);
+      if (!transfer) return;
+      
+      try {
+        console.log(`Creating file from ${transfer.chunks.length} chunks`);
+        const blob = new Blob(transfer.chunks, { type: transfer.metadata.type });
+        const file = new File([blob], transfer.metadata.name, { type: transfer.metadata.type });
+        
+        console.log('File created:', file.name, 'size:', file.size);
+        
+        // Clean up
+        this.fileTransfers.delete(fileId);
+        
+        // Notify the application
+        this.onMessageCallback({
+          type: 'file-received',
+          file: file,
+          index: transfer.metadata.index
+        });
+      } catch (error) {
+        console.error('Error creating file:', error);
+      }
+    }
+    
     sendMessage(data: any) {
       if (this.dataChannel && this.dataChannel.readyState === 'open') {
-        this.dataChannel.send(JSON.stringify(data));
+        try {
+          this.dataChannel.send(JSON.stringify(data));
+        } catch (error) {
+          console.error('Error sending message:', error);
+        }
       } else {
         console.error('Data channel not open');
       }
     }
     
     sendFile(file: File, index: number) {
-      if (!this.dataChannel || this.dataChannel.readyState !== 'open') {
-        console.error('Data channel not open');
+      // If not connected, queue the file
+      if (!this.isConnected || !this.dataChannel || this.dataChannel.readyState !== 'open') {
+        console.log('Connection not ready, queuing file:', file.name);
+        this.pendingFiles.push({ file, index });
         return;
       }
       
-      const fileId = crypto.randomUUID();
-      const chunkSize = 16384; // 16KB chunks
-      const totalChunks = Math.ceil(file.size / chunkSize);
+      // If connected, send immediately
+      this.sendFileNow(file, index);
+    }
+    
+    private sendFileNow(file: File, index: number) {
+      console.log('Starting to send file now:', file.name, 'size:', file.size);
       
-      // Send file metadata first
-      this.sendMessage({
-        type: 'file-start',
-        fileId: fileId,
-        name: file.name,
-        fileType: file.type,
-        size: file.size,
-        totalChunks: totalChunks,
-        index: index
+      try {
+        // Generate a unique ID for this file transfer
+        const fileId = crypto.randomUUID();
+        const chunkSize = 16384; // 16KB chunks
+        const totalChunks = Math.ceil(file.size / chunkSize);
+        
+        // First, send metadata
+        this.sendMessage({
+          type: 'file-start',
+          id: fileId,
+          name: file.name,
+          mimeType: file.type,
+          size: file.size,
+          totalChunks: totalChunks,
+          index: index
         });
+        
+        // Wait a bit for the receiver to process the metadata
+        setTimeout(() => {
+          this.sendFileChunks(file, fileId, chunkSize, totalChunks, 0);
+        }, 500);
+      } catch (error) {
+        console.error('Error initiating file transfer:', error);
+      }
+    }
+    
+    private sendFileChunks(file: File, fileId: string, chunkSize: number, totalChunks: number, currentChunk: number) {
+      if (currentChunk >= totalChunks) {
+        // All chunks sent
+        this.sendMessage({
+          type: 'file-end',
+          id: fileId
+        });
+        console.log('File transfer complete:', file.name);
+        return;
+      }
       
-      let offset = 0;
+      const start = currentChunk * chunkSize;
+      const end = Math.min(start + chunkSize, file.size);
+      const chunk = file.slice(start, end);
       
-      // Function to send a chunk
-      const sendChunk = async () => {
-        if (offset >= file.size) {
-          // All chunks sent
-          this.sendMessage({
-            type: 'file-end',
-            fileId: fileId,
-            index: index
+      try {
+        // First, send info about the chunk
+        this.sendMessage({
+          type: 'file-chunk',
+          id: fileId,
+          chunkIndex: currentChunk
+        });
+        
+        // Wait briefly for the receiver to prepare
+        setTimeout(() => {
+          // Then send the binary data
+          chunk.arrayBuffer().then(buffer => {
+            if (this.dataChannel && this.dataChannel.readyState === 'open') {
+              this.dataChannel.send(buffer);
+              
+              // Move to the next chunk after a short delay
+              setTimeout(() => {
+                this.sendFileChunks(file, fileId, chunkSize, totalChunks, currentChunk + 1);
+              }, 10);
+            }
           });
-          return;
-        }
-        
-        const chunk = file.slice(offset, offset + chunkSize);
-        const buffer = await chunk.arrayBuffer();
-        
-        // Create a header with the fileId
-        const headerBytes = new TextEncoder().encode(fileId);
-        
-        // Combine header and chunk
-        const combined = new Uint8Array(headerBytes.length + buffer.byteLength);
-        combined.set(headerBytes, 0);
-        combined.set(new Uint8Array(buffer), headerBytes.length);
-        
-        this.dataChannel!.send(combined.buffer);
-        
-        offset += chunkSize;
-        
-        // Wait a bit to prevent flooding the channel
-        setTimeout(sendChunk, 0);
-      };
-      
-      // Start sending chunks
-      sendChunk();
+        }, 10);
+      } catch (error) {
+        console.error('Error sending chunk:', error);
+        // Try again after a delay
+        setTimeout(() => {
+          this.sendFileChunks(file, fileId, chunkSize, totalChunks, currentChunk);
+        }, 500);
+      }
     }
     
     disconnect() {
@@ -294,5 +379,9 @@ export class WebRTCClient {
       if (this.ws) {
         this.ws.close();
       }
+    }
+    
+    isDataChannelOpen() {
+      return this.isConnected && this.dataChannel && this.dataChannel.readyState === 'open';
     }
   }
