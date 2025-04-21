@@ -5,7 +5,8 @@
   "scripts": {
     "dev": "vite",
     "electron": "electron .",
-    "start": "concurrently \"bun run dev\" \"wait-on http://localhost:5173 && bun run electron\""
+    "start": "concurrently \"bun run dev\" \"wait-on http://localhost:5173 && bun run electron\"",
+    "desktop": "bun run start"
   },
   "keywords": [],
   "author": "",
