@@ -2,6 +2,7 @@ import { createRoot } from 'react-dom/client'
 import React, { useState, useEffect, useRef } from 'react'
 import './styles.css'
 import { WebRTCClient } from './webrct/indexRtc'
+import { AudioSync } from './webrct/audioSync'
 
 const App = () => {
   const [darkMode, setDarkMode] = useState(
@@ -9,15 +10,18 @@ const App = () => {
     window.matchMedia('(prefers-color-scheme: dark)').matches
   )
   const [clientId, setClientId] = useState('')
-  const [targetId, setTargetId] = useState('')
+  const [roomCode, setRoomCode] = useState('')
   const [isConnected, setIsConnected] = useState(false)
   const [isHost, setIsHost] = useState(false)
+  const [connectedUsers, setConnectedUsers] = useState<string[]>([])
   const [playlist, setPlaylist] = useState<File[]>([])
   const [currentTrack, setCurrentTrack] = useState<number>(-1)
   const [isLoading, setIsLoading] = useState(false)
   const [loadingMessage, setLoadingMessage] = useState('')
+  const [connectionState, setConnectionState] = useState('disconnected')
   
   const webrtcRef = useRef<WebRTCClient | null>(null)
+  const audioSyncRef = useRef<AudioSync | null>(null)
   const audioRef = useRef<HTMLAudioElement>(null)
   
   useEffect(() => {
@@ -44,52 +48,15 @@ const App = () => {
   const toggleDarkMode = () => {
     setDarkMode(!darkMode)
   }
-
-  const handleConnect = () => {
-    if (!clientId || !targetId) {
-      alert('Please enter both IDs')
-      return
-    }
-    
-    console.log('Connecting as', isHost ? 'host' : 'client', 'with ID', clientId, 'to', targetId);
-    
-    // Create WebRTC client
-    webrtcRef.current = new WebRTCClient(clientId, handleWebRtcMessage)
-    webrtcRef.current.connect()
-    
-    // If host, initiate connection
-    if (isHost) {
-      setTimeout(() => {
-        console.log('Creating offer to', targetId);
-        webrtcRef.current?.createOffer(targetId)
-      }, 1000)
-    }
-    
-    setIsConnected(true)
-  }
   
   const handleWebRtcMessage = (data: any) => {
+    console.log('Received WebRTC message:', data);
+    
+    if (audioSyncRef.current) {
+      audioSyncRef.current.handlePeerMessage(data);
+    }
+    
     switch (data.type) {
-      case 'play':
-        if (audioRef.current) {
-          audioRef.current.currentTime = data.currentTime
-          audioRef.current.play()
-        }
-        break
-      case 'pause':
-        if (audioRef.current) audioRef.current.pause()
-        break
-      case 'seek':
-        if (audioRef.current) audioRef.current.currentTime = data.currentTime
-        break
-      case 'track':
-        setCurrentTrack(data.index)
-        break
-      case 'sync':
-        if (audioRef.current && Math.abs(audioRef.current.currentTime - data.currentTime) > 0.5) {
-          audioRef.current.currentTime = data.currentTime
-        }
-        break
       case 'file-received':
         console.log('File received in component:', data.file.name, 'size:', data.file.size);
         // Add the received file to the playlist
@@ -101,8 +68,98 @@ const App = () => {
         if (playlist.length === 0) {
           setCurrentTrack(0)
         }
-        break
+        break;
     }
+  }
+  
+  const handleRoomEvent = (data: any) => {
+    console.log('Room event:', data);
+    
+    switch (data.type) {
+      case 'connected':
+        setClientId(data.clientId);
+        break;
+        
+      case 'room-created':
+        setRoomCode(data.roomCode);
+        setIsHost(true);
+        setConnectedUsers([clientId]);
+        setConnectionState('hosting');
+        setIsConnected(true);
+        
+        if (audioSyncRef.current) {
+          audioSyncRef.current.setIsHost(true);
+        }
+        break;
+        
+      case 'room-joined':
+        setRoomCode(data.roomCode);
+        setConnectedUsers(data.members);
+        setIsHost(data.members[0] === clientId);
+        setConnectionState('joined');
+        setIsConnected(true);
+        
+        if (audioSyncRef.current) {
+          audioSyncRef.current.setIsHost(data.members[0] === clientId);
+        }
+        break;
+        
+      case 'user-joined':
+        setConnectedUsers(prev => [...prev, data.clientId]);
+        break;
+        
+      case 'user-left':
+        setConnectedUsers(prev => prev.filter(id => id !== data.clientId));
+        break;
+        
+      case 'error':
+        alert(`Error: ${data.message}`);
+        break;
+    }
+  }
+
+  const createRoom = () => {
+    if (!clientId) {
+      alert('Please wait to receive a client ID');
+      return;
+    }
+    
+    console.log('Creating room as host');
+    
+    // Initialize WebRTC and AudioSync if not done already
+    if (!webrtcRef.current) {
+      webrtcRef.current = new WebRTCClient(handleWebRtcMessage, handleRoomEvent);
+      webrtcRef.current.connect();
+      
+      audioSyncRef.current = new AudioSync(webrtcRef.current);
+    }
+    
+    // Create room after a short delay to ensure connection is established
+    setTimeout(() => {
+      webrtcRef.current?.createRoom();
+    }, 1000);
+  }
+  
+  const joinRoom = () => {
+    if (!clientId || !roomCode) {
+      alert('Please wait to receive a client ID and enter a room code');
+      return;
+    }
+    
+    console.log('Joining room:', roomCode);
+    
+    // Initialize WebRTC and AudioSync if not done already
+    if (!webrtcRef.current) {
+      webrtcRef.current = new WebRTCClient(handleWebRtcMessage, handleRoomEvent);
+      webrtcRef.current.connect();
+      
+      audioSyncRef.current = new AudioSync(webrtcRef.current);
+    }
+    
+    // Join room after a short delay to ensure connection is established
+    setTimeout(() => {
+      webrtcRef.current?.joinRoom(roomCode);
+    }, 1000);
   }
   
   const addToPlaylist = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -117,15 +174,15 @@ const App = () => {
         setCurrentTrack(0)
       }
       
-      // Send files to the other peer if we're the host
+      // Send files to other peers if we're the host
       if (isHost && webrtcRef.current) {
-        console.log('Sending files to peer:', newFiles.map(f => f.name));
+        console.log('Broadcasting files to peers:', newFiles.map(f => f.name));
         
         newFiles.forEach((file, idx) => {
           const fileIndex = playlist.length + idx
           setIsLoading(true)
           setLoadingMessage(`Sending ${file.name}...`)
-          webrtcRef.current?.sendFile(file, fileIndex)
+          webrtcRef.current?.broadcastFile(file, fileIndex)
         })
       }
     }
@@ -134,58 +191,29 @@ const App = () => {
   const playTrack = (index: number) => {
     setCurrentTrack(index)
     
-    if (isHost && webrtcRef.current) {
-      webrtcRef.current.sendMessage({
-        type: 'track',
-        index: index
-      })
+    if (audioSyncRef.current) {
+      audioSyncRef.current.loadLocalAudio(playlist[index]);
     }
   }
   
   useEffect(() => {
-    // Set up audio element event listeners for sync
-    if (audioRef.current && isHost) {
-      const syncInterval = setInterval(() => {
-        if (audioRef.current && !audioRef.current.paused && webrtcRef.current) {
-          webrtcRef.current.sendMessage({
-            type: 'sync',
-            currentTime: audioRef.current.currentTime
-          })
-        }
-      }, 1000)
-      
-      // Handle play events
-      audioRef.current.onplay = () => {
-        if (webrtcRef.current) {
-          webrtcRef.current.sendMessage({
-            type: 'play',
-            currentTime: audioRef.current?.currentTime || 0
-          })
-        }
+    // Initialize WebRTC client on component mount
+    webrtcRef.current = new WebRTCClient(handleWebRtcMessage, handleRoomEvent);
+    webrtcRef.current.connect();
+    
+    audioSyncRef.current = new AudioSync(webrtcRef.current);
+    
+    return () => {
+      // Clean up on unmount
+      if (webrtcRef.current) {
+        webrtcRef.current.disconnect();
       }
       
-      // Handle pause events
-      audioRef.current.onpause = () => {
-        if (webrtcRef.current) {
-          webrtcRef.current.sendMessage({
-            type: 'pause'
-          })
-        }
+      if (audioSyncRef.current) {
+        audioSyncRef.current.dispose();
       }
-      
-      // Handle seeking events
-      audioRef.current.onseeked = () => {
-        if (webrtcRef.current) {
-          webrtcRef.current.sendMessage({
-            type: 'seek',
-            currentTime: audioRef.current?.currentTime || 0
-          })
-        }
-      }
-      
-      return () => clearInterval(syncInterval)
-    }
-  }, [isHost, isConnected])
+    };
+  }, []);
 
   return (
     <div className="min-h-screen bg-white dark:bg-gray-900 text-gray-900 dark:text-white transition-colors duration-300">
@@ -202,54 +230,73 @@ const App = () => {
         
         {!isConnected ? (
           <div className="bg-white dark:bg-gray-800 p-6 rounded-lg shadow-md">
-            <h2 className="text-2xl mb-4">Connect with a friend</h2>
+            <h2 className="text-2xl mb-4">Create or Join a Room</h2>
+            
+            {clientId ? (
+              <div className="mb-4 p-2 bg-green-100 dark:bg-green-900 rounded">
+                <p>Your ID: <span className="font-mono">{clientId}</span></p>
+              </div>
+            ) : (
+              <div className="mb-4 p-2 bg-yellow-100 dark:bg-yellow-900 rounded">
+                <p>Connecting to server...</p>
+              </div>
+            )}
+            
             <div className="space-y-4">
-              <div>
-                <label className="block mb-1">Your ID</label>
-                <input 
-                  type="text" 
-                  value={clientId}
-                  onChange={(e) => setClientId(e.target.value)}
-                  className="w-full p-2 border rounded dark:bg-gray-700 dark:border-gray-600"
-                  placeholder="Enter a unique ID"
-                />
+              <div className="border-t border-gray-200 dark:border-gray-700 pt-4">
+                <h3 className="text-xl mb-2">Create a New Room</h3>
+                <button 
+                  onClick={createRoom}
+                  disabled={!clientId}
+                  className="w-full bg-blue-500 hover:bg-blue-600 disabled:bg-gray-400 text-white py-2 rounded"
+                >
+                  Create Room
+                </button>
               </div>
               
-              <div>
-                <label className="block mb-1">Friend's ID</label>
-                <input 
-                  type="text" 
-                  value={targetId}
-                  onChange={(e) => setTargetId(e.target.value)}
-                  className="w-full p-2 border rounded dark:bg-gray-700 dark:border-gray-600"
-                  placeholder="Enter your friend's ID"
-                />
+              <div className="border-t border-gray-200 dark:border-gray-700 pt-4">
+                <h3 className="text-xl mb-2">Join Existing Room</h3>
+                <div className="mb-2">
+                  <input 
+                    type="text" 
+                    value={roomCode}
+                    onChange={(e) => setRoomCode(e.target.value.toUpperCase())}
+                    placeholder="Enter 6-digit room code"
+                    className="w-full p-2 border rounded dark:bg-gray-700 dark:border-gray-600"
+                    maxLength={6}
+                  />
+                </div>
+                <button 
+                  onClick={joinRoom}
+                  disabled={!clientId || roomCode.length !== 6}
+                  className="w-full bg-green-500 hover:bg-green-600 disabled:bg-gray-400 text-white py-2 rounded"
+                >
+                  Join Room
+                </button>
               </div>
-              
-              <div className="flex items-center">
-                <input 
-                  type="checkbox" 
-                  id="host" 
-                  checked={isHost}
-                  onChange={() => setIsHost(!isHost)}
-                  className="mr-2"
-                />
-                <label htmlFor="host">I'm the host (controls playback)</label>
-              </div>
-              
-              <button 
-                onClick={handleConnect}
-                className="w-full bg-blue-500 hover:bg-blue-600 text-white py-2 rounded"
-              >
-                Connect
-              </button>
             </div>
           </div>
         ) : (
           <div className="bg-white dark:bg-gray-800 p-6 rounded-lg shadow-md">
-            <h2 className="text-2xl mb-4">
-              {isHost ? 'Hosting Session' : 'Connected to Host'}
-            </h2>
+            <div className="flex justify-between items-center mb-4">
+              <h2 className="text-2xl">
+                {isHost ? 'Hosting Room' : 'Connected to Room'}
+              </h2>
+              <div className="bg-blue-100 dark:bg-blue-900 px-3 py-1 rounded">
+                Room: <span className="font-mono font-bold">{roomCode}</span>
+              </div>
+            </div>
+            
+            <div className="mb-4 p-3 bg-gray-100 dark:bg-gray-700 rounded">
+              <h3 className="font-semibold mb-1">Connected Users:</h3>
+              <ul className="list-disc list-inside">
+                {connectedUsers.map((user, index) => (
+                  <li key={user} className="font-mono">
+                    {user} {user === clientId ? '(You)' : ''} {index === 0 ? '(Host)' : ''}
+                  </li>
+                ))}
+              </ul>
+            </div>
             
             {isLoading && (
               <div className="mb-4 p-3 bg-yellow-100 dark:bg-yellow-900 rounded">

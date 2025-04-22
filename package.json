@@ -7,7 +7,7 @@
     "lint": "turbo run lint",
     "check-types": "turbo run check-types",
     "format": "prettier --write \"**/*.{ts,tsx,md}\"",
-    "desktop": "turbo run desktop --filter=desktop-app"
+    "desktop": "turbo run desktop --filter=desktop-app && turbo run dev --filter=signaling-server"
   },
   "devDependencies": {
     "prettier": "^3.5.3",
