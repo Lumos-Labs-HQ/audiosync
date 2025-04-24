@@ -216,21 +216,32 @@ const App = () => {
   }, []);
 
   return (
-    <div className="min-h-screen bg-white dark:bg-gray-900 text-gray-900 dark:text-white transition-colors duration-300">
-      <div className="container mx-auto p-4">
-        <div className="flex justify-between items-center mb-8">
-          <h1 className="text-4xl font-semibold">Sync Sound</h1>
+    <div className="min-h-screen flex flex-col bg-purple-900 dark:bg-purple-950 text-gray-100">
+      {/* App Header - update header background */}
+      <header className="bg-purple-800 dark:bg-purple-900 border-b border-purple-700">
+        <div className="flex items-center justify-between px-4 py-2">
+          <div className="flex items-center space-x-2">
+            <h1 className="text-xl font-semibold">Sync Sound</h1>
+            {isConnected && (
+              <span className="bg-blue-100 dark:bg-blue-900 px-2 py-1 rounded text-sm">
+                Room: <span className="font-mono font-bold">{roomCode}</span>
+              </span>
+            )}
+          </div>
           <button 
             onClick={toggleDarkMode}
-            className="p-2 rounded-md bg-gray-200 dark:bg-gray-700"
+            className="p-1.5 rounded-md hover:bg-gray-200 dark:hover:bg-gray-700"
           >
-            {darkMode ? '🌞 Light' : '🌙 Dark'}
+            {darkMode ? '🌞' : '🌙'}
           </button>
         </div>
-        
-        {!isConnected ? (
-          <div className="bg-white dark:bg-gray-800 p-6 rounded-lg shadow-md">
-            <h2 className="text-2xl mb-4">Create or Join a Room</h2>
+      </header>
+
+      {/* Update the login/connection card background */}
+      {!isConnected ? (
+        <div className="flex-1 flex items-center justify-center p-4">
+          <div className="bg-purple-800 dark:bg-purple-900 p-6 rounded-lg shadow-lg w-full max-w-md">
+            <h2 className="text-2xl mb-4 font-bold">Create or Join a Room</h2>
             
             {clientId ? (
               <div className="mb-4 p-2 bg-green-100 dark:bg-green-900 rounded">
@@ -244,112 +255,119 @@ const App = () => {
             
             <div className="space-y-4">
               <div className="border-t border-gray-200 dark:border-gray-700 pt-4">
-                <h3 className="text-xl mb-2">Create a New Room</h3>
+                <h3 className="text-lg font-medium mb-2">Create a New Room</h3>
                 <button 
                   onClick={createRoom}
                   disabled={!clientId}
-                  className="w-full bg-blue-500 hover:bg-blue-600 disabled:bg-gray-400 text-white py-2 rounded"
+                  className="w-full bg-blue-500 hover:bg-blue-600 disabled:bg-gray-400 text-white py-2 rounded-md transition-colors"
                 >
                   Create Room
                 </button>
               </div>
               
               <div className="border-t border-gray-200 dark:border-gray-700 pt-4">
-                <h3 className="text-xl mb-2">Join Existing Room</h3>
-                <div className="mb-2">
-                  <input 
-                    type="text" 
-                    value={roomCode}
-                    onChange={(e) => setRoomCode(e.target.value.toUpperCase())}
-                    placeholder="Enter 6-digit room code"
-                    className="w-full p-2 border rounded dark:bg-gray-700 dark:border-gray-600"
-                    maxLength={6}
-                  />
-                </div>
+                <h3 className="text-lg font-medium mb-2">Join Existing Room</h3>
+                <input 
+                  type="text" 
+                  value={roomCode}
+                  onChange={(e) => setRoomCode(e.target.value.toUpperCase())}
+                  placeholder="Enter 6-digit room code"
+                  className="w-full p-2 mb-2 border rounded-md dark:bg-gray-700 dark:border-gray-600 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  maxLength={6}
+                />
                 <button 
                   onClick={joinRoom}
                   disabled={!clientId || roomCode.length !== 6}
-                  className="w-full bg-green-500 hover:bg-green-600 disabled:bg-gray-400 text-white py-2 rounded"
+                  className="w-full bg-green-500 hover:bg-green-600 disabled:bg-gray-400 text-white py-2 rounded-md transition-colors"
                 >
                   Join Room
                 </button>
               </div>
             </div>
           </div>
-        ) : (
-          <div className="bg-white dark:bg-gray-800 p-6 rounded-lg shadow-md">
-            <div className="flex justify-between items-center mb-4">
-              <h2 className="text-2xl">
-                {isHost ? 'Hosting Room' : 'Connected to Room'}
-              </h2>
-              <div className="bg-blue-100 dark:bg-blue-900 px-3 py-1 rounded">
-                Room: <span className="font-mono font-bold">{roomCode}</span>
-              </div>
-            </div>
-            
-            <div className="mb-4 p-3 bg-gray-100 dark:bg-gray-700 rounded">
-              <h3 className="font-semibold mb-1">Connected Users:</h3>
-              <ul className="list-disc list-inside">
+        </div>
+      ) : (
+        <div className="flex-1 flex">
+          {/* Sidebar - update background */}
+          <div className="w-64 bg-purple-800 dark:bg-purple-900 border-r border-purple-700">
+            <div className="p-4">
+              <h3 className="font-medium mb-2">Connected Users</h3>
+              <ul className="space-y-1">
                 {connectedUsers.map((user, index) => (
-                  <li key={user} className="font-mono">
-                    {user} {user === clientId ? '(You)' : ''} {index === 0 ? '(Host)' : ''}
+                  <li key={user} className="flex items-center space-x-2 text-sm py-1 px-2 rounded">
+                    <span className="w-2 h-2 bg-green-500 rounded-full"></span>
+                    <span className="font-mono">
+                      {user === clientId ? 'You' : `User ${index + 1}`}
+                      {index === 0 && ' (Host)'}
+                    </span>
                   </li>
                 ))}
               </ul>
             </div>
-            
+          </div>
+
+          {/* Main Content */}
+          <div className="flex-1 flex flex-col">
             {isLoading && (
-              <div className="mb-4 p-3 bg-yellow-100 dark:bg-yellow-900 rounded">
-                <p>{loadingMessage}</p>
+              <div className="bg-yellow-100 dark:bg-yellow-900 px-4 py-2 text-sm">
+                {loadingMessage}
               </div>
             )}
-            
-            {isHost && (
-              <div className="mb-4">
-                <label className="block mb-1">Add to Playlist</label>
-                <input 
-                  type="file" 
-                  accept="audio/*" 
-                  multiple
-                  onChange={addToPlaylist}
-                  className="block w-full text-sm text-gray-500
-                    file:mr-4 file:py-2 file:px-4
-                    file:rounded-full file:border-0
-                    file:text-sm file:font-semibold
-                    file:bg-blue-50 file:text-blue-700
-                    hover:file:bg-blue-100
-                    dark:file:bg-gray-700 dark:file:text-gray-100"
-                />
-              </div>
-            )}
-            
-            <div className="mb-6">
-              <h3 className="text-xl mb-2">Playlist</h3>
-              {playlist.length > 0 ? (
-                <ul className="divide-y divide-gray-200 dark:divide-gray-700">
-                  {playlist.map((file, index) => (
-                    <li 
-                      key={index}
-                      className={`py-2 px-1 cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-700 
-                        ${currentTrack === index ? 'bg-blue-100 dark:bg-blue-900' : ''}`}
-                      onClick={() => isHost && playTrack(index)}
-                    >
-                      {file.name}
-                    </li>
-                  ))}
-                </ul>
-              ) : (
-                <p className="text-gray-500">
-                  {isHost ? "No tracks added yet" : "Waiting for host to add tracks..."}
-                </p>
+
+            {/* Playlist Section */}
+            <div className="flex-1 p-4 overflow-auto">
+              {isHost && (
+                <div className="mb-4">
+                  <button
+                    onClick={() => document.getElementById('file-input')?.click()}
+                    className="flex items-center space-x-2 px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white rounded-md"
+                  >
+                    <span>Add Files</span>
+                  </button>
+                  <input 
+                    id="file-input"
+                    type="file" 
+                    accept="audio/*" 
+                    multiple
+                    onChange={addToPlaylist}
+                    className="hidden"
+                  />
+                </div>
               )}
+
+              <div className="bg-purple-800 dark:bg-purple-900 rounded-lg shadow">
+                <div className="px-4 py-3 border-b border-gray-200 dark:border-gray-700">
+                  <h3 className="font-medium">Playlist</h3>
+                </div>
+                {playlist.length > 0 ? (
+                  <ul className="divide-y divide-gray-200 dark:divide-gray-700">
+                    {playlist.map((file, index) => (
+                      <li 
+                        key={index}
+                        className={`flex items-center px-4 py-2 hover:bg-gray-50 dark:hover:bg-gray-700 cursor-pointer
+                          ${currentTrack === index ? 'bg-blue-50 dark:bg-blue-900' : ''}`}
+                        onClick={() => isHost && playTrack(index)}
+                      >
+                        <span className="mr-3">
+                          {currentTrack === index ? '▶️' : `${index + 1}.`}
+                        </span>
+                        <span className="flex-1 truncate">{file.name}</span>
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <div className="p-4 text-center text-gray-500">
+                    {isHost ? "No tracks added yet" : "Waiting for host to add tracks..."}
+                  </div>
+                )}
+              </div>
             </div>
-            
-            <div>
-              <h3 className="text-xl mb-2">Now Playing</h3>
+
+            {/* Update audio player background */}
+            <div className="border-t border-purple-700 bg-purple-800 dark:bg-purple-900 p-4">
               {currentTrack >= 0 && playlist[currentTrack] ? (
                 <div>
-                  <p className="mb-2">{playlist[currentTrack].name}</p>
+                  <div className="mb-2 font-medium">{playlist[currentTrack].name}</div>
                   <audio 
                     ref={audioRef}
                     controls
@@ -358,12 +376,14 @@ const App = () => {
                   />
                 </div>
               ) : (
-                <p className="text-gray-500">No track selected</p>
+                <div className="text-center text-gray-500">
+                  No track selected
+                </div>
               )}
             </div>
           </div>
-        )}
-      </div>
+        </div>
+      )}
     </div>
   )
 }
