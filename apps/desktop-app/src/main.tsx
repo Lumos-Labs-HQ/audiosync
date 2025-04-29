@@ -217,68 +217,70 @@ const App = () => {
 
   return (
     <div className="min-h-screen flex flex-col bg-purple-900 dark:bg-purple-950 text-gray-100">
-      {/* App Header - update header background */}
-      <header className="bg-purple-800 dark:bg-purple-900 border-b border-purple-700">
-        <div className="flex items-center justify-between px-4 py-2">
-          <div className="flex items-center space-x-2">
-            <h1 className="text-xl font-semibold">Sync Sound</h1>
-            {isConnected && (
-              <span className="bg-blue-100 dark:bg-blue-900 px-2 py-1 rounded text-sm">
-                Room: <span className="font-mono font-bold">{roomCode}</span>
-              </span>
-            )}
-          </div>
+      {/* Native-style titlebar */}
+      <div className="bg-purple-950 dark:bg-black flex items-center justify-between px-4 py-2 select-none app-drag">
+        <div className="flex items-center space-x-3">
+          <img src="/app-icon.png" className="w-5 h-5" alt="logo" />
+          <h1 className="text-sm font-medium">Sync Sound</h1>
+        </div>
+        <div className="flex items-center space-x-2">
           <button 
             onClick={toggleDarkMode}
-            className="p-1.5 rounded-md hover:bg-gray-200 dark:hover:bg-gray-700"
+            className="p-1 hover:bg-purple-800 rounded-md text-sm"
           >
             {darkMode ? '🌞' : '🌙'}
           </button>
+          {/* Add window controls if needed */}
         </div>
-      </header>
+      </div>
 
-      {/* Update the login/connection card background */}
+      {/* Main content */}
       {!isConnected ? (
-        <div className="flex-1 flex items-center justify-center p-4">
-          <div className="bg-purple-800 dark:bg-purple-900 p-6 rounded-lg shadow-lg w-full max-w-md">
-            <h2 className="text-2xl mb-4 font-bold">Create or Join a Room</h2>
+        <div className="flex-1 flex items-center justify-center p-8">
+          <div className="bg-purple-800/50 backdrop-blur-sm dark:bg-purple-900/50 p-8 rounded-xl shadow-2xl w-full max-w-md border border-purple-700/50">
+            <h2 className="text-2xl mb-6 font-bold bg-gradient-to-r from-blue-400 to-purple-400 bg-clip-text text-transparent">
+              Create or Join a Room
+            </h2>
             
             {clientId ? (
-              <div className="mb-4 p-2 bg-green-100 dark:bg-green-900 rounded">
-                <p>Your ID: <span className="font-mono">{clientId}</span></p>
+              <div className="mb-6 p-3 bg-green-500/20 border border-green-500/30 rounded-lg">
+                <p className="text-sm">Your ID: <span className="font-mono font-medium">{clientId}</span></p>
               </div>
             ) : (
-              <div className="mb-4 p-2 bg-yellow-100 dark:bg-yellow-900 rounded">
-                <p>Connecting to server...</p>
+              <div className="mb-6 p-3 bg-yellow-500/20 border border-yellow-500/30 rounded-lg">
+                <p className="text-sm flex items-center gap-2">
+                  <span className="animate-spin">⌛</span>
+                  Connecting to server...
+                </p>
               </div>
             )}
-            
-            <div className="space-y-4">
-              <div className="border-t border-gray-200 dark:border-gray-700 pt-4">
-                <h3 className="text-lg font-medium mb-2">Create a New Room</h3>
+
+            <div className="space-y-6">
+              <div className="border-t border-purple-700/50 pt-6">
+                <h3 className="text-lg font-medium mb-3">Create a New Room</h3>
                 <button 
                   onClick={createRoom}
                   disabled={!clientId}
-                  className="w-full bg-blue-500 hover:bg-blue-600 disabled:bg-gray-400 text-white py-2 rounded-md transition-colors"
+                  className="w-full bg-gradient-to-r from-blue-500 to-purple-500 hover:from-blue-600 hover:to-purple-600 disabled:from-gray-600 disabled:to-gray-700 text-white py-2.5 rounded-lg transition-all shadow-lg hover:shadow-xl disabled:shadow-none"
                 >
                   Create Room
                 </button>
               </div>
               
-              <div className="border-t border-gray-200 dark:border-gray-700 pt-4">
-                <h3 className="text-lg font-medium mb-2">Join Existing Room</h3>
+              <div className="border-t border-purple-700/50 pt-6">
+                <h3 className="text-lg font-medium mb-3">Join Existing Room</h3>
                 <input 
                   type="text" 
                   value={roomCode}
                   onChange={(e) => setRoomCode(e.target.value.toUpperCase())}
                   placeholder="Enter 6-digit room code"
-                  className="w-full p-2 mb-2 border rounded-md dark:bg-gray-700 dark:border-gray-600 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  className="w-full p-2.5 mb-3 rounded-lg bg-purple-950/50 border border-purple-700/50 focus:ring-2 focus:ring-purple-400 focus:border-transparent transition-all"
                   maxLength={6}
                 />
                 <button 
                   onClick={joinRoom}
                   disabled={!clientId || roomCode.length !== 6}
-                  className="w-full bg-green-500 hover:bg-green-600 disabled:bg-gray-400 text-white py-2 rounded-md transition-colors"
+                  className="w-full bg-gradient-to-r from-green-500 to-emerald-500 hover:from-green-600 hover:to-emerald-600 disabled:from-gray-600 disabled:to-gray-700 text-white py-2.5 rounded-lg transition-all shadow-lg hover:shadow-xl disabled:shadow-none"
                 >
                   Join Room
                 </button>
@@ -288,15 +290,20 @@ const App = () => {
         </div>
       ) : (
         <div className="flex-1 flex">
-          {/* Sidebar - update background */}
-          <div className="w-64 bg-purple-800 dark:bg-purple-900 border-r border-purple-700">
+          {/* Sidebar */}
+          <div className="w-72 bg-purple-800/30 backdrop-blur-sm border-r border-purple-700/50">
             <div className="p-4">
-              <h3 className="font-medium mb-2">Connected Users</h3>
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="font-medium">Room Members</h3>
+                <span className="text-xs bg-purple-700/50 px-2 py-1 rounded">
+                  {roomCode}
+                </span>
+              </div>
               <ul className="space-y-1">
                 {connectedUsers.map((user, index) => (
-                  <li key={user} className="flex items-center space-x-2 text-sm py-1 px-2 rounded">
-                    <span className="w-2 h-2 bg-green-500 rounded-full"></span>
-                    <span className="font-mono">
+                  <li key={user} className="flex items-center space-x-2 text-sm py-2 px-3 rounded-lg bg-purple-950/30 border border-purple-700/30">
+                    <span className="w-2 h-2 bg-green-500 rounded-full shadow-lg shadow-green-500/50"></span>
+                    <span className="font-medium">
                       {user === clientId ? 'You' : `User ${index + 1}`}
                       {index === 0 && ' (Host)'}
                     </span>
@@ -309,20 +316,23 @@ const App = () => {
           {/* Main Content */}
           <div className="flex-1 flex flex-col">
             {isLoading && (
-              <div className="bg-yellow-100 dark:bg-yellow-900 px-4 py-2 text-sm">
-                {loadingMessage}
+              <div className="bg-yellow-500/20 border-b border-yellow-500/30 px-4 py-2 text-sm">
+                <div className="flex items-center gap-2">
+                  <span className="animate-spin">⌛</span>
+                  {loadingMessage}
+                </div>
               </div>
             )}
 
             {/* Playlist Section */}
-            <div className="flex-1 p-4 overflow-auto">
+            <div className="flex-1 p-6 overflow-auto">
               {isHost && (
-                <div className="mb-4">
+                <div className="mb-6">
                   <button
                     onClick={() => document.getElementById('file-input')?.click()}
-                    className="flex items-center space-x-2 px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white rounded-md"
+                    className="flex items-center space-x-2 px-6 py-2.5 bg-gradient-to-r from-blue-500 to-purple-500 hover:from-blue-600 hover:to-purple-600 text-white rounded-lg shadow-lg hover:shadow-xl transition-all"
                   >
-                    <span>Add Files</span>
+                    <span>Add Audio Files</span>
                   </button>
                   <input 
                     id="file-input"
@@ -335,48 +345,55 @@ const App = () => {
                 </div>
               )}
 
-              <div className="bg-purple-800 dark:bg-purple-900 rounded-lg shadow">
-                <div className="px-4 py-3 border-b border-gray-200 dark:border-gray-700">
+              <div className="bg-purple-800/30 backdrop-blur-sm rounded-xl border border-purple-700/50">
+                <div className="px-4 py-3 border-b border-purple-700/50">
                   <h3 className="font-medium">Playlist</h3>
                 </div>
                 {playlist.length > 0 ? (
-                  <ul className="divide-y divide-gray-200 dark:divide-gray-700">
+                  <ul className="divide-y divide-purple-700/30">
                     {playlist.map((file, index) => (
                       <li 
                         key={index}
-                        className={`flex items-center px-4 py-2 hover:bg-gray-50 dark:hover:bg-gray-700 cursor-pointer
-                          ${currentTrack === index ? 'bg-blue-50 dark:bg-blue-900' : ''}`}
+                        className={`flex items-center px-4 py-3 hover:bg-purple-700/20 cursor-pointer transition-colors
+                          ${currentTrack === index ? 'bg-blue-500/20 border-l-4 border-blue-500' : ''}`}
                         onClick={() => isHost && playTrack(index)}
                       >
-                        <span className="mr-3">
-                          {currentTrack === index ? '▶️' : `${index + 1}.`}
+                        <span className="mr-3 w-6 text-center">
+                          {currentTrack === index ? '▶️' : `${index + 1}`}
                         </span>
                         <span className="flex-1 truncate">{file.name}</span>
                       </li>
                     ))}
                   </ul>
                 ) : (
-                  <div className="p-4 text-center text-gray-500">
-                    {isHost ? "No tracks added yet" : "Waiting for host to add tracks..."}
+                  <div className="p-8 text-center text-gray-400">
+                    {isHost ? (
+                      <div className="space-y-2">
+                        <p>No tracks in playlist</p>
+                        <p className="text-sm">Click "Add Audio Files" to get started</p>
+                      </div>
+                    ) : (
+                      "Waiting for host to add tracks..."
+                    )}
                   </div>
                 )}
               </div>
             </div>
 
-            {/* Update audio player background */}
-            <div className="border-t border-purple-700 bg-purple-800 dark:bg-purple-900 p-4">
+            {/* Audio Player */}
+            <div className="border-t border-purple-700/50 bg-purple-800/30 backdrop-blur-sm p-6">
               {currentTrack >= 0 && playlist[currentTrack] ? (
-                <div>
-                  <div className="mb-2 font-medium">{playlist[currentTrack].name}</div>
+                <div className="space-y-3">
+                  <div className="font-medium truncate">{playlist[currentTrack].name}</div>
                   <audio 
                     ref={audioRef}
                     controls
-                    className="w-full"
+                    className="w-full audio-player"
                     controlsList={isHost ? undefined : "noplaybackrate"}
                   />
                 </div>
               ) : (
-                <div className="text-center text-gray-500">
+                <div className="text-center text-gray-400">
                   No track selected
                 </div>
               )}
