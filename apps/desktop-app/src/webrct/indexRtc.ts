@@ -162,7 +162,13 @@ export class WebRTCClient {
       this.connections.set(targetId, connection);
       this.setupPeerConnectionListeners(targetId, connection);
       
-      const dataChannel = connection.createDataChannel('audioSync');
+      // Configure data channel for low-latency audio streaming
+      const dataChannel = connection.createDataChannel('audioSync', {
+        ordered: true,          // Keep packets in order
+        maxRetransmits: 0,      // Don't retransmit lost packets - just move on
+        // priority: 'high'        // Prioritize audio data
+      });
+      
       this.dataChannels.set(targetId, dataChannel);
       this.setupDataChannel(targetId, dataChannel);
       
@@ -247,6 +253,20 @@ export class WebRTCClient {
     private setupDataChannel(peerId: string, dataChannel: RTCDataChannel) {
       dataChannel.binaryType = 'arraybuffer';
       
+      // Configure for low latency - Using proper RTCDataChannelInit options
+      // Note: You can't modify these properties after channel creation,
+      // so we'll make sure we're not attempting to do that
+      
+      // Instead of trying to set these properties directly (which causes errors),
+      // log the current configuration for debugging purposes
+      console.log(`DataChannel with ${peerId} config:`, {
+        ordered: dataChannel.ordered,
+        maxPacketLifeTime: dataChannel.maxPacketLifeTime,
+        maxRetransmits: dataChannel.maxRetransmits,
+        protocol: dataChannel.protocol,
+        negotiated: dataChannel.negotiated
+      });
+      
       dataChannel.onopen = () => {
         console.log(`Data channel opened with ${peerId}`);
         
@@ -269,10 +289,47 @@ export class WebRTCClient {
         console.log(`Data channel closed with ${peerId}`);
       };
       
+      let expectingBinary = false;
+      let pendingMetadata:any = null;
+      
       dataChannel.onmessage = (event) => {
-        if (typeof event.data === 'string') {
+        if (expectingBinary && event.data instanceof ArrayBuffer) {
+          // Handle binary message with the pending metadata
+          expectingBinary = false;
+          
+          // Calculate network latency
+          const latency = Date.now() - (pendingMetadata.sentAt || 0);
+          if (pendingMetadata.sentAt) {
+            console.log(`Audio chunk ${pendingMetadata.sequence} received with ${latency}ms latency`);
+          }
+          
+          // Convert ArrayBuffer to Blob - use WAV for audio chunks for compatibility
+          const mimeType = pendingMetadata.format === 'wav' ? 'audio/wav' : 'audio/webm';
+          const blob = new Blob([event.data], { type: mimeType });
+          
+          // Call the message callback with both metadata and binary data
+          this.onMessageCallback({
+            ...pendingMetadata,
+            blob: blob, // Use blob property for consistency
+            binary: blob, // Keep binary for backward compatibility
+            fromClient: peerId,
+            receivedAt: Date.now()
+          });
+          
+          pendingMetadata = null;
+        } else if (typeof event.data === 'string') {
           try {
             const data = JSON.parse(event.data);
+            
+            // Check if this message indicates binary data will follow
+            if (data.binaryFollowing) {
+              expectingBinary = true;
+              pendingMetadata = data;
+              
+              // Log that we're waiting for binary data
+              console.log(`Expecting binary data for ${data.type}, sequence: ${data.sequence}`);
+              return; // Wait for binary data
+            }
             
             switch (data.type) {
               case 'file-start':
@@ -316,7 +373,8 @@ export class WebRTCClient {
                 // All other messages get passed to the callback
                 this.onMessageCallback({
                   ...data,
-                  fromClient: peerId
+                  fromClient: peerId,
+                  receivedAt: Date.now()
                 });
             }
           } catch (error) {
@@ -473,6 +531,51 @@ export class WebRTCClient {
           this.sendFileChunks(peerId, file, fileId, chunkSize, totalChunks, currentChunk);
         }, 500);
       }
+    }
+    
+    broadcastBinary(data: Blob, metadata: any) {
+      // For real-time audio streaming, we need to optimize for low latency
+      // Set a maximum chunk size to avoid buffer overflows (300KB)
+      if (data.size > 300000) {
+        console.warn(`Chunk too large (${data.size} bytes), may cause issues`);
+      }
+      
+      // Send to all connected peers
+      for (const peerId of this.dataChannels.keys()) {
+        this.sendBinaryToClient(peerId, data, metadata);
+      }
+    }
+    
+    private sendBinaryToClient(peerId: string, data: Blob, metadata: any) {
+      const dataChannel = this.dataChannels.get(peerId);
+      if (!dataChannel || dataChannel.readyState !== 'open') {
+        return; // Skip if connection not ready
+      }
+      
+      // Check if the data channel is congested
+      if (dataChannel.bufferedAmount > 1024*1024) {
+        console.warn(`Data channel to ${peerId} is congested, skipping chunk`);
+        return; // Skip this chunk if the channel is congested
+      }
+      
+      // Send metadata with high priority
+      this.sendMessage(peerId, {
+        ...metadata,
+        binaryFollowing: true,
+        binarySize: data.size,
+        sentAt: Date.now() // Add timestamp for latency measurement
+      });
+      
+      // Send binary data immediately after metadata
+      data.arrayBuffer().then(buffer => {
+        if (dataChannel && dataChannel.readyState === 'open') {
+          try {
+            dataChannel.send(buffer);
+          } catch (e) {
+            console.error(`Failed to send binary data to ${peerId}:`, e);
+          }
+        }
+      });
     }
     
     disconnect() {

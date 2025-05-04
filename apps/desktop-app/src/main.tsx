@@ -18,11 +18,13 @@ const App = () => {
   const [currentTrack, setCurrentTrack] = useState<number>(-1)
   const [isLoading, setIsLoading] = useState(false)
   const [loadingMessage, setLoadingMessage] = useState('')
-  const [connectionState, setConnectionState] = useState('disconnected')
+  const [permissionGranted, setPermissionGranted] = useState(false)
+  const [permissionRequested, setPermissionRequested] = useState(false)
+  const [isAudioPlaying, setIsAudioPlaying] = useState(false)
+  const [bufferingStatus, setBufferingStatus] = useState('');
   
   const webrtcRef = useRef<WebRTCClient | null>(null)
   const audioSyncRef = useRef<AudioSync | null>(null)
-  const audioRef = useRef<HTMLAudioElement>(null)
   
   useEffect(() => {
     if (darkMode) {
@@ -34,47 +36,102 @@ const App = () => {
   }, [darkMode])
   
   useEffect(() => {
-    if (audioRef.current && currentTrack >= 0 && playlist[currentTrack]) {
-      const url = URL.createObjectURL(playlist[currentTrack])
-      audioRef.current.src = url
-      audioRef.current.load()
+    const requestPermission = async () => {
+      try {
+        setPermissionRequested(true);
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        stream.getTracks().forEach(track => track.stop());
+        setPermissionGranted(true);
+      } catch (err) {
+        console.error('Error requesting audio permission:', err);
+        setPermissionGranted(false);
+      }
+    };
+    
+    if (!permissionRequested) {
+      requestPermission();
+    }
+  }, [permissionRequested]);
+  
+  useEffect(() => {
+    if (currentTrack >= 0 && playlist[currentTrack] && audioSyncRef.current) {
+      audioSyncRef.current.loadLocalAudio(playlist[currentTrack]);
       
+      // If host, automatically start playing
       if (isHost) {
-        audioRef.current.play()
+        setTimeout(() => {
+          audioSyncRef.current?.play();
+          setIsAudioPlaying(true);
+        }, 500); // Give a little time for audio to load
       }
     }
-  }, [currentTrack, playlist])
+  }, [currentTrack, playlist, isHost]);
   
   const toggleDarkMode = () => {
     setDarkMode(!darkMode)
   }
   
   const handleWebRtcMessage = (data: any) => {
-    console.log('Received WebRTC message:', data);
-    
+    // Always pass message to AudioSync first
     if (audioSyncRef.current) {
       audioSyncRef.current.handlePeerMessage(data);
     }
     
+    // Then handle UI updates
     switch (data.type) {
       case 'file-received':
-        console.log('File received in component:', data.file.name, 'size:', data.file.size);
-        // Add the received file to the playlist
-        setPlaylist(prev => [...prev, data.file])
-        setLoadingMessage('')
-        setIsLoading(false)
+        if (data.file) {
+          setPlaylist(prev => [...prev, data.file]);
+          setLoadingMessage('');
+          setIsLoading(false);
+          
+          // If it's the first track, automatically select it
+          if (playlist.length === 0) {
+            setCurrentTrack(0);
+          }
+        }
+        break;
         
-        // If it's the first track, play it
-        if (playlist.length === 0) {
-          setCurrentTrack(0)
+      case 'control':
+        if (data.action === 'play') {
+          setIsAudioPlaying(true);
+          setLoadingMessage('');
+        } else if (data.action === 'pause') {
+          setIsAudioPlaying(false);
+        } else if (data.action === 'sync') {
+          setBufferingStatus('Syncing...');
+          setTimeout(() => setBufferingStatus(''), 1000);
+        }
+        break;
+        
+      case 'stream-info':
+        if (!isHost) {
+          setLoadingMessage(`Preparing to stream: ${data.name}`);
+          setIsLoading(true);
+          setCurrentTrack(0);
+        }
+        break;
+        
+      case 'stream-end':
+        if (!isHost) {
+          setIsAudioPlaying(false);
+          setLoadingMessage('');
+          setIsLoading(false);
+        }
+        break;
+        
+      case 'audio-chunk':
+        if (!isHost) {
+          if (data.sequence < 5 || data.sequence % 20 === 0) {
+            setBufferingStatus(`Received chunk ${data.sequence}`);
+          }
+          setIsLoading(false);
         }
         break;
     }
   }
   
   const handleRoomEvent = (data: any) => {
-    console.log('Room event:', data);
-    
     switch (data.type) {
       case 'connected':
         setClientId(data.clientId);
@@ -84,7 +141,6 @@ const App = () => {
         setRoomCode(data.roomCode);
         setIsHost(true);
         setConnectedUsers([clientId]);
-        setConnectionState('hosting');
         setIsConnected(true);
         
         if (audioSyncRef.current) {
@@ -96,7 +152,6 @@ const App = () => {
         setRoomCode(data.roomCode);
         setConnectedUsers(data.members);
         setIsHost(data.members[0] === clientId);
-        setConnectionState('joined');
         setIsConnected(true);
         
         if (audioSyncRef.current) {
@@ -124,12 +179,15 @@ const App = () => {
       return;
     }
     
-    console.log('Creating room as host');
+    if (!permissionGranted) {
+      alert('Audio permission is required. Please allow microphone access.');
+      return;
+    }
     
     // Initialize WebRTC and AudioSync if not done already
     if (!webrtcRef.current) {
       webrtcRef.current = new WebRTCClient(handleWebRtcMessage, handleRoomEvent);
-      webrtcRef.current.connect();
+      webrtcRef.current.connect('ws://' + window.location.hostname + ':3001');
       
       audioSyncRef.current = new AudioSync(webrtcRef.current);
     }
@@ -146,12 +204,15 @@ const App = () => {
       return;
     }
     
-    console.log('Joining room:', roomCode);
+    if (!permissionGranted) {
+      alert('Audio permission is required. Please allow microphone access.');
+      return;
+    }
     
     // Initialize WebRTC and AudioSync if not done already
     if (!webrtcRef.current) {
       webrtcRef.current = new WebRTCClient(handleWebRtcMessage, handleRoomEvent);
-      webrtcRef.current.connect();
+      webrtcRef.current.connect('ws://' + window.location.hostname + ':3001');
       
       audioSyncRef.current = new AudioSync(webrtcRef.current);
     }
@@ -163,48 +224,83 @@ const App = () => {
   }
   
   const addToPlaylist = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files) {
-      const newFiles = Array.from(e.target.files)
-      console.log('Adding files to playlist:', newFiles.map(f => f.name));
+    if (e.target.files && e.target.files.length > 0) {
+      const newFiles = Array.from(e.target.files);
+      setPlaylist(prev => [...prev, ...newFiles]);
       
-      setPlaylist(prev => [...prev, ...newFiles])
-      
-      // If this is the first track added, select it
-      if (playlist.length === 0 && newFiles.length > 0) {
-        setCurrentTrack(0)
+      // If this is the first file added and we're the host,
+      // select it automatically for playback
+      if (playlist.length === 0) {
+        setCurrentTrack(0);
       }
       
-      // Send files to other peers if we're the host
-      if (isHost && webrtcRef.current) {
-        console.log('Broadcasting files to peers:', newFiles.map(f => f.name));
-        
-        newFiles.forEach((file, idx) => {
-          const fileIndex = playlist.length + idx
-          setIsLoading(true)
-          setLoadingMessage(`Sending ${file.name}...`)
-          webrtcRef.current?.broadcastFile(file, fileIndex)
-        })
+      // If we're host, broadcast the file to all peers
+      if (webrtcRef.current && isHost) {
+        newFiles.forEach((file, index) => {
+          webrtcRef.current?.broadcastFile(file, playlist.length + index);
+        });
       }
     }
   }
   
   const playTrack = (index: number) => {
-    setCurrentTrack(index)
-    
-    if (audioSyncRef.current) {
-      audioSyncRef.current.loadLocalAudio(playlist[index]);
+    if (index >= 0 && index < playlist.length) {
+      setCurrentTrack(index);
+      // Play will be triggered in the useEffect
     }
   }
+  
+  const togglePlayPause = () => {
+    if (!audioSyncRef.current) return;
+    
+    if (isAudioPlaying) {
+      audioSyncRef.current.pause();
+      setIsAudioPlaying(false);
+    } else {
+      // Ensure audio context is resumed before playing
+      const audioCtx = (window as any).audioContext;
+      if (audioCtx && audioCtx.state === 'suspended') {
+        audioCtx.resume().then(() => {
+          audioSyncRef.current?.play();
+          setIsAudioPlaying(true);
+        }).catch((err: Error) => {
+          console.error("Error resuming audio context:", err);
+        });
+      } else {
+        audioSyncRef.current.play();
+        setIsAudioPlaying(true);
+      }
+    }
+  };
   
   useEffect(() => {
     // Initialize WebRTC client on component mount
     webrtcRef.current = new WebRTCClient(handleWebRtcMessage, handleRoomEvent);
-    webrtcRef.current.connect();
+    webrtcRef.current.connect('ws://' + window.location.hostname + ':3001');
     
     audioSyncRef.current = new AudioSync(webrtcRef.current);
     
+    // Add a click handler to the document to ensure audio context activation
+    const handleUserInteraction = () => {
+      if (audioSyncRef.current) {
+        const audioCtx = (audioSyncRef.current as any).audioContext;
+        if (audioCtx && audioCtx.state === 'suspended') {
+          audioCtx.resume().catch((err: Error) => {
+            console.error("Failed to resume audio context:", err);
+          });
+        }
+      }
+    };
+    
+    document.addEventListener('click', handleUserInteraction);
+    document.addEventListener('touchstart', handleUserInteraction);
+    document.addEventListener('keydown', handleUserInteraction);
+    
     return () => {
-      // Clean up on unmount
+      document.removeEventListener('click', handleUserInteraction);
+      document.removeEventListener('touchstart', handleUserInteraction);
+      document.removeEventListener('keydown', handleUserInteraction);
+      
       if (webrtcRef.current) {
         webrtcRef.current.disconnect();
       }
@@ -227,6 +323,19 @@ const App = () => {
             {darkMode ? '🌞 Light' : '🌙 Dark'}
           </button>
         </div>
+        
+        {!permissionGranted && (
+          <div className="mb-4 p-3 bg-red-100 dark:bg-red-900 rounded">
+            <p className="font-bold">Microphone Access Required</p>
+            <p>This app needs access to your microphone for audio synchronization.</p>
+            <button 
+              onClick={() => setPermissionRequested(false)}
+              className="mt-2 px-3 py-1 bg-blue-500 text-white rounded"
+            >
+              Request Permission
+            </button>
+          </div>
+        )}
         
         {!isConnected ? (
           <div className="bg-white dark:bg-gray-800 p-6 rounded-lg shadow-md">
@@ -350,12 +459,39 @@ const App = () => {
               {currentTrack >= 0 && playlist[currentTrack] ? (
                 <div>
                   <p className="mb-2">{playlist[currentTrack].name}</p>
-                  <audio 
-                    ref={audioRef}
-                    controls
-                    className="w-full"
-                    controlsList={isHost ? undefined : "noplaybackrate"}
-                  />
+                  
+                  {bufferingStatus && (
+                    <div className="my-2 p-1 text-xs text-center bg-blue-100 dark:bg-blue-900 rounded">
+                      {bufferingStatus}
+                    </div>
+                  )}
+                  
+                  {/* Controls */}
+                  <div className="flex items-center justify-center space-x-4 my-4">
+                    <button
+                      onClick={togglePlayPause}
+                      className="p-3 rounded-full bg-blue-500 text-white hover:bg-blue-600"
+                      disabled={!permissionGranted || (!isHost && !isAudioPlaying)}
+                    >
+                      {isAudioPlaying ? (
+                        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
+                          <rect x="6" y="4" width="4" height="16"/>
+                          <rect x="14" y="4" width="4" height="16"/>
+                        </svg>
+                      ) : (
+                        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
+                          <path d="M8 5v14l11-7z"/>
+                        </svg>
+                      )}
+                    </button>
+                  </div>
+                  
+                  {/* Connection info */}
+                  <div className="mt-4 p-2 bg-gray-100 dark:bg-gray-800 rounded text-sm">
+                    <p>Role: <span className="font-semibold">{isHost ? 'Host' : 'Client'}</span></p>
+                    <p>Status: <span className="font-semibold">{isAudioPlaying ? 'Playing' : 'Paused'}</span></p>
+                    {!isHost && <p className="text-yellow-600">Only the host can select tracks and control playback</p>}
+                  </div>
                 </div>
               ) : (
                 <p className="text-gray-500">No track selected</p>
@@ -371,3 +507,9 @@ const App = () => {
 const container = document.getElementById('root')
 const root = createRoot(container!)
 root.render(<App />)
+
+function formatTime(seconds: number): string {
+  const mins = Math.floor(seconds / 60);
+  const secs = Math.floor(seconds % 60);
+  return `${mins}:${secs.toString().padStart(2, '0')}`;
+}

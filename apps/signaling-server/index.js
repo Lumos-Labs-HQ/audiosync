@@ -1,11 +1,19 @@
 const WebSocket = require('ws');
 
-const wss = new WebSocket.Server({ port: 3001 }, () => {
-  console.log('Signaling server running on ws://localhost:3001');
+const wss = new WebSocket.Server({
+  host: '0.0.0.0',
+  port: 3001,
+  // Increase max payload to handle larger signaling messages
+  maxPayload: 65536, 
+  // Faster ping detection
+  perMessageDeflate: false
+}, () => {
+  console.log('Signaling server running on ws://0.0.0.0:3001');
+  console.log('Connect using your local network IP address');
 });
 
-const rooms = new Map(); // Map of room code -> Set of client IDs
-const clients = new Map(); // Map of client ID -> WebSocket
+const rooms = new Map(); 
+const clients = new Map();
 
 wss.on('connection', (ws) => {
   const clientId = generateClientId();
@@ -135,10 +143,21 @@ wss.on('connection', (ws) => {
 function broadcastToRoom(roomCode, message, excludeClientId = null) {
   if (!rooms.has(roomCode)) return;
   
+  // Prepare the JSON string once for all recipients
+  const messageString = JSON.stringify(message);
+  
   const members = rooms.get(roomCode);
   for (const memberId of members) {
     if (memberId !== excludeClientId && clients.has(memberId)) {
-      clients.get(memberId).send(JSON.stringify(message));
+      const ws = clients.get(memberId);
+      // Use BINARY message type for slightly faster delivery
+      if (ws.readyState === WebSocket.OPEN) {
+        try {
+          ws.send(messageString);
+        } catch (e) {
+          console.error(`Error sending to client ${memberId}:`, e);
+        }
+      }
     }
   }
 }
