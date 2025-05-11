@@ -1,177 +1,77 @@
-const WebSocket = require('ws');
-
-const wss = new WebSocket.Server({
-  host: '0.0.0.0',
-  port: 3001,
-  // Increase max payload to handle larger signaling messages
-  maxPayload: 65536, 
-  // Faster ping detection
-  perMessageDeflate: false
-}, () => {
-  console.log('Signaling server running on ws://0.0.0.0:3001');
-  console.log('Connect using your local network IP address');
+const { Server } = require('socket.io');
+const io = new Server({
+  cors: { origin: '*', methods: ['GET', 'POST'] }
 });
 
-const rooms = new Map(); 
-const clients = new Map();
+const rooms = new Map();
 
-wss.on('connection', (ws) => {
-  const clientId = generateClientId();
-  console.log(`New client connected: ${clientId}`);
+io.on('connection', (socket) => {
+  console.log('Client connected:', socket.id);
   
-  // Associate the client ID with this websocket
-  clients.set(clientId, ws);
-  
-  // Send the client its assigned ID
-  ws.send(JSON.stringify({
-    type: 'client-id',
-    id: clientId
-  }));
-  
-  ws.on('message', (message) => {
-    try {
-      const data = JSON.parse(message);
-      console.log(`Received message type: ${data.type} from client ${clientId}`);
+  socket.on('join-room', (roomId) => {
+    console.log(`Client ${socket.id} joining room ${roomId}`);
+    socket.join(roomId);
+    
+    // Create room if it doesn't exist
+    if (!rooms.has(roomId)) {
+      rooms.set(roomId, new Set());
+    }
+    
+    // Add client to room
+    rooms.get(roomId).add(socket.id);
+    
+    // Notify client they joined successfully
+    socket.emit('room-joined', roomId);
+    
+    // Notify others in the room
+    socket.to(roomId).emit('user-joined', socket.id);
+  });
 
-      switch (data.type) {
-        case 'create-room':
-          const roomCode = generateRoomCode();
-          rooms.set(roomCode, new Set([clientId]));
-          
-          console.log(`Room ${roomCode} created by client ${clientId}`);
-          
-          // Send room code back to creator
-          ws.send(JSON.stringify({
-            type: 'room-created',
-            roomCode: roomCode
-          }));
-          break;
-          
-        case 'join-room':
-          const roomToJoin = data.roomCode;
-          
-          if (!rooms.has(roomToJoin)) {
-            ws.send(JSON.stringify({
-              type: 'error',
-              message: 'Room does not exist'
-            }));
-            return;
-          }
-          
-          // Add client to room
-          rooms.get(roomToJoin).add(clientId);
-          
-          console.log(`Client ${clientId} joined room ${roomToJoin}`);
-          
-          // Notify everyone in the room about the new member
-          broadcastToRoom(roomToJoin, {
-            type: 'user-joined',
-            clientId: clientId
-          }, clientId);
-          
-          // Send room membership to the joining client
-          const members = Array.from(rooms.get(roomToJoin));
-          ws.send(JSON.stringify({
-            type: 'room-joined',
-            roomCode: roomToJoin,
-            members: members
-          }));
-          break;
-          
-        case 'offer':
-        case 'answer':
-        case 'candidate':
-          // Forward signaling messages to the intended recipient
-          if (data.to && clients.has(data.to)) {
-            console.log(`Forwarding ${data.type} from ${clientId} to ${data.to}`);
-            clients.get(data.to).send(JSON.stringify({
-              ...data,
-              from: clientId
-            }));
-          }
-          break;
-          
-        case 'broadcast':
-          // Find which room this client is in
-          for (const [roomCode, members] of rooms.entries()) {
-            if (members.has(clientId)) {
-              console.log(`Broadcasting message from ${clientId} in room ${roomCode}`);
-              // Forward to all clients in the room except sender
-              broadcastToRoom(roomCode, {
-                type: 'broadcast',
-                from: clientId,
-                payload: data.payload
-              }, clientId);
-              break;
-            }
-          }
-          break;
+  socket.on('audio-chunk', (data) => {
+    // Broadcast the audio chunk to the specific room with timestamp
+    if (data && data.roomId && data.chunk) {
+      // Always preserve the original timestamp for accurate sync
+      // Only generate a timestamp if one wasn't provided
+      if (!data.timestamp) {
+        data.timestamp = Date.now();
+        console.log(`No timestamp provided, adding server timestamp: ${data.timestamp}`);
       }
-    } catch (e) {
-      console.error('Error handling message:', e);
+      
+      console.log(`Broadcasting audio chunk to room ${data.roomId}, size: ${data.chunk.byteLength}, timestamp: ${data.timestamp}`);
+      
+      // Forward the chunk with original timestamp to all others in the room
+      // This keeps the timing intact for synchronization
+      socket.to(data.roomId).emit('audio-chunk', {
+        chunk: data.chunk,
+        timestamp: data.timestamp
+      });
+    } else {
+      console.warn('Received invalid audio chunk data:', Object.keys(data || {}));
     }
   });
 
-  ws.on('close', () => {
-    console.log(`Client ${clientId} disconnected`);
+  socket.on('disconnect', () => {
+    console.log('Client disconnected:', socket.id);
     
     // Remove client from any rooms they were in
-    for (const [roomCode, members] of rooms.entries()) {
-      if (members.has(clientId)) {
-        members.delete(clientId);
-        console.log(`Removed ${clientId} from room ${roomCode}`);
+    rooms.forEach((clients, roomId) => {
+      if (clients.has(socket.id)) {
+        clients.delete(socket.id);
+        console.log(`Removed ${socket.id} from room ${roomId}`);
         
         // Notify others in the room
-        broadcastToRoom(roomCode, {
-          type: 'user-left',
-          clientId: clientId
-        });
+        socket.to(roomId).emit('user-left', socket.id);
         
-        // If room is empty, remove it
-        if (members.size === 0) {
-          rooms.delete(roomCode);
-          console.log(`Room ${roomCode} deleted (empty)`);
+        // Clean up empty rooms
+        if (clients.size === 0) {
+          rooms.delete(roomId);
+          console.log(`Deleted empty room ${roomId}`);
         }
       }
-    }
-    
-    // Remove from clients map
-    clients.delete(clientId);
+    });
   });
 });
 
-function broadcastToRoom(roomCode, message, excludeClientId = null) {
-  if (!rooms.has(roomCode)) return;
-  
-  // Prepare the JSON string once for all recipients
-  const messageString = JSON.stringify(message);
-  
-  const members = rooms.get(roomCode);
-  for (const memberId of members) {
-    if (memberId !== excludeClientId && clients.has(memberId)) {
-      const ws = clients.get(memberId);
-      // Use BINARY message type for slightly faster delivery
-      if (ws.readyState === WebSocket.OPEN) {
-        try {
-          ws.send(messageString);
-        } catch (e) {
-          console.error(`Error sending to client ${memberId}:`, e);
-        }
-      }
-    }
-  }
-}
-
-function generateClientId() {
-  return 'client_' + Math.random().toString(36).substr(2, 9);
-}
-
-function generateRoomCode() {
-  // Generate a 6-character room code
-  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // Omitting similar-looking characters
-  let code = '';
-  for (let i = 0; i < 6; i++) {
-    code += chars.charAt(Math.floor(Math.random() * chars.length));
-  }
-  return code;
-}
+const port = process.env.PORT || 3001;
+io.listen(port);
+console.log(`Socket.IO server running on port ${port}`);

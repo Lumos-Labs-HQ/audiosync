@@ -1,121 +1,79 @@
 # Audio Sync
 
-A desktop application that allows you to play audio files in perfect synchronization between two devices. Share your music with friends remotely and listen together with precise timing.
-
-![Audio Sync](https://i.imgur.com/placeholder.png)
+A real-time audio streaming desktop application built with Electron, React, and WebRTC. This app allows users to create rooms and stream audio files to other participants in real-time.
 
 ## Features
 
-- **Real-time Audio Synchronization**: Play audio files with millisecond-level synchronization across devices
-- **Direct File Transfer**: Share audio files directly between peers without a central server
-- **Playlist Management**: Create and manage playlists that sync between connected peers
-- **Host/Client Architecture**: One user controls playback while others stay perfectly in sync
-- **Robust Connectivity**: Automatic reconnection and recovery from network issues
-- **Dark Mode Support**: Toggle between light and dark themes
-- **Offline Operation**: No internet required once peers are connected on the same network
+- Create and join audio streaming rooms
+- Real-time audio streaming using WebRTC
+- No server-side storage of audio files
+- Cross-platform desktop application
+- Modern and clean user interface
 
-## Technology Stack
-
-- **Electron**: Cross-platform desktop application framework
-- **WebRTC**: Peer-to-peer communication for direct data transfer and synchronization
-- **React**: UI component library
-- **TypeScript**: Type-safe JavaScript
-- **Tailwind CSS**: Utility-first CSS framework
-- **Vite**: Next-generation frontend build tool
-- **Turborepo**: Monorepo build system
-
-## Project Structure
-```
-audio-sync/
-├── apps/
-│ ├── desktop-app/ # Electron application
-│ │ ├── main.js # Electron main process
-│ │ ├── src/ # Application source
-│ │ │ ├── main.tsx # React entry point
-│ │ │ ├── webrct/ # WebRTC implementation
-│ │ │ │ ├── indexRtc.ts # WebRTC client
-│ │ │ ├── styles.css # Tailwind styles
-│ │ ├── index.html # HTML template
-│ ├── signaling-server/ # WebRTC signaling server
-│ │ ├── index.js # WebSocket server implementation
-├── package.json # Root package configuration
-├── turbo.json # Turborepo configuration
-```
-## How It Works
-
-1. **Connection Setup**:
-   - The signaling server facilitates the initial connection between peers
-   - WebRTC establishes a direct peer-to-peer connection for low-latency communication
-
-2. **File Sharing**:
-   - The host can add audio files to the playlist
-   - Files are chunked and transferred directly to connected peers
-   - Both parties have identical files for perfect playback
-
-3. **Playback Synchronization**:
-   - When the host plays, pauses, or seeks, these actions are mirrored on the client
-   - Timing information is continuously shared to maintain sync
-   - Playback rate is dynamically adjusted to correct for any timing drift
-
-## Getting Started
-
-### Prerequisites
+## Prerequisites
 
 - Node.js 18 or higher
-- Bun package manager (`npm install -g bun`)
+- npm or yarn package manager
 
-### Installation
+## Installation
 
 1. Clone the repository:
-   ```
-   git clone https://github.com/yourusername/audio-sync.git
-   cd audio-sync
-   ```
+```bash
+git clone <repository-url>
+cd audio-sync
+```
 
 2. Install dependencies:
-   ```
-   bun install
-   ```
+```bash
+npm install
+```
 
-3. Start the signaling server:
-   ```
-   cd apps/signaling-server
-   bun run start
-   ```
+## Running the Application
 
-4. In a new terminal, start the desktop app:
-   ```
-   cd apps/desktop-app
-   bun run start
-   ```
+1. Start both the signaling server and desktop app:
+```bash
+npm start
+```
 
-### Usage
+This will start:
+- Signaling server on port 3001
+- Desktop app development server on port 5173
 
-1. **Connecting Devices**:
-   - On the first device, enter a unique ID and check "I'm the host"
-   - On the second device, enter a different unique ID and the host's ID
+The Electron app will automatically launch and display your local IP address in the window title.
 
-2. **Sharing Audio**:
-   - The host can add audio files to the playlist
-   - Files are automatically transferred to connected peers
-   - All connected devices can see the shared playlist
+## Usage
 
-3. **Synchronized Playback**:
-   - The host controls playback (play, pause, seek)
-   - Client devices automatically stay in sync with the host
+1. **Creating a Room**
+   - Launch the application
+   - Enter a room ID in the input field
+   - Click "Create Room"
+   - You are now the host of the room
+
+2. **Joining a Room**
+   - Launch the application
+   - Enter the room ID provided by the host
+   - Click "Join Room"
+   - Wait for the host to start streaming audio
+
+3. **Streaming Audio (Host Only)**
+   - After creating a room, click "Choose File" to select an audio file
+   - Click "Start Streaming" to begin broadcasting to all participants
+   - The audio will play in real-time for all connected users
+
+## Technical Details
+
+- Uses WebRTC for peer-to-peer audio streaming
+- Socket.IO for signaling and room management
+- Audio is streamed directly between peers without server storage
+- Built with React and TypeScript for type safety
+- Electron for cross-platform desktop support
 
 ## Development
 
-- Build the application: `bun run build`
-- Run in development mode: `bun run dev`
-- Run the desktop app with Electron: `bun run desktop`
+- `npm run build` - Build the application
+- `npm run preview` - Preview the built application
 
 ## License
 
-This project is licensed under the MIT License - see the LICENSE file for details.
-
-## Acknowledgments
-
-- This project was built with [Electron](https://www.electronjs.org/), [React](https://reactjs.org/), and [WebRTC](https://webrtc.org/)
-- Inspired by the need for synchronized audio playback across devices
+MIT
 
