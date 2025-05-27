@@ -35,7 +35,7 @@ const App: React.FC = () => {
     };
     console.log = customLogger;
 
-    const signalingServer = 'http://localhost:3001';
+    const signalingServer = 'http://localhost:3000  ';
     try {
       addDebugMessage('Initializing AudioSync');
       audioSyncRef.current = new AudioSync(signalingServer);

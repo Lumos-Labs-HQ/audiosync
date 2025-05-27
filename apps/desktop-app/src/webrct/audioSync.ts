@@ -24,7 +24,10 @@ export class AudioSync {
     private bufferAheadTime: number = 0.5; // Buffer ahead time in seconds
     private recalibrationCount: number = 0;
     private maxBufferSize: number = 5 * 1024 * 1024; // 5MB max buffer size
-    
+    private systemAudioStream: MediaStream | null = null;
+    private mediaRecorder: MediaRecorder | null = null;
+    private isStreamingSystemAudio: boolean = false;
+
     constructor(signalingServer: string) {
         console.log("Creating AudioSync with server:", signalingServer);
         this.socket = io(signalingServer);
@@ -232,13 +235,15 @@ export class AudioSync {
             console.log('User left:', userId);
         });
 
-        this.socket.on('audio-chunk', (data: { chunk: ArrayBuffer, timestamp: number }) => {
+        this.socket.on('audio-chunk', (data: { chunk: ArrayBuffer, timestamp: number, isSystemAudio?: boolean }) => {
             if (!data || !data.chunk) {
                 console.warn('Received invalid audio chunk');
                 return;
             }
             
-            console.log(`Received audio chunk, size: ${data.chunk.byteLength}, timestamp: ${data.timestamp}`);
+            // Handle system audio differently if needed
+            const audioType = data.isSystemAudio ? 'system' : 'file';
+            console.log(`Received ${audioType} audio chunk, size: ${data.chunk.byteLength}, timestamp: ${data.timestamp}`);
             this.audioChunks.push(data.chunk);
             
             // Store the first timestamp as our base
@@ -637,7 +642,162 @@ export class AudioSync {
         return new Promise(resolve => setTimeout(resolve, ms));
     }
 
+    public async startSystemAudioCapture(): Promise<void> {
+        if (!this.currentRoomId) {
+            throw new Error('Must join a room first');
+        }
+
+        try {
+            console.log('Requesting system audio capture...');
+            
+            // Request screen capture with audio
+            this.systemAudioStream = await navigator.mediaDevices.getDisplayMedia({
+                video: false, // We only want audio
+                audio: {
+                    echoCancellation: false,
+                    noiseSuppression: false,
+                    autoGainControl: false,
+                    sampleRate: 48000, // High quality audio
+                    channelCount: 2 // Stereo
+                }
+            });
+
+            console.log('System audio stream acquired');
+            this.isSender = true;
+            this.isStreamingSystemAudio = true;
+
+            // Set up MediaRecorder for real-time streaming
+            this.setupSystemAudioRecorder();
+
+        } catch (error:any) {
+            console.error('Error capturing system audio:', error);
+            if (error.name === 'NotAllowedError') {
+                throw new Error('System audio capture permission denied. Please allow screen sharing with audio.');
+            } else if (error.name === 'NotSupportedError') {
+                throw new Error('System audio capture not supported in this browser.');
+            }
+            throw error;
+        }
+    }
+
+    private setupSystemAudioRecorder(): void {
+        if (!this.systemAudioStream) return;
+
+        try {
+            // Use a small timeslice for low latency
+            const options = {
+                mimeType: 'audio/webm; codecs=opus', // Opus is great for real-time
+                audioBitsPerSecond: 128000 // 128kbps for good quality
+            };
+
+            // Fallback MIME types if opus not supported
+            const supportedTypes = [
+                'audio/webm; codecs=opus',
+                'audio/webm',
+                'audio/mp4',
+                'audio/mpeg'
+            ];
+
+            let selectedType = '';
+            for (const type of supportedTypes) {
+                if (MediaRecorder.isTypeSupported(type)) {
+                    selectedType = type;
+                    options.mimeType = type;
+                    break;
+                }
+            }
+
+            console.log(`Using MediaRecorder with MIME type: ${selectedType}`);
+
+            this.mediaRecorder = new MediaRecorder(this.systemAudioStream, options);
+
+            // Handle data available (small chunks for low latency)
+            this.mediaRecorder.ondataavailable = (event) => {
+                if (event.data.size > 0) {
+                    this.handleSystemAudioChunk(event.data);
+                }
+            };
+
+            this.mediaRecorder.onerror = (event) => {
+                console.error('MediaRecorder error:', event);
+            };
+
+            this.mediaRecorder.onstop = () => {
+                console.log('System audio recording stopped');
+                this.isStreamingSystemAudio = false;
+            };
+
+            // Start recording with small time slices (100ms for low latency)
+            this.mediaRecorder.start(100);
+            console.log('Started system audio recording');
+
+            // Handle stream ending (user stops sharing)
+            this.systemAudioStream.getTracks().forEach(track => {
+                track.addEventListener('ended', () => {
+                    console.log('System audio track ended');
+                    this.stopSystemAudioCapture();
+                });
+            });
+
+        } catch (error) {
+            console.error('Error setting up MediaRecorder:', error);
+            throw error;
+        }
+    }
+
+    private async handleSystemAudioChunk(blob: Blob): Promise<void> {
+        try {
+            // Convert blob to ArrayBuffer
+            const arrayBuffer = await blob.arrayBuffer();
+            
+            if (arrayBuffer.byteLength === 0) return;
+
+            const timestamp = Date.now();
+            
+            console.log(`Sending system audio chunk, size: ${arrayBuffer.byteLength}, timestamp: ${timestamp}`);
+
+            // Send the chunk immediately for low latency
+            this.socket.emit('audio-chunk', {
+                roomId: this.currentRoomId,
+                chunk: arrayBuffer,
+                timestamp: timestamp,
+                isSystemAudio: true // Flag to indicate this is system audio
+            });
+
+        } catch (error) {
+            console.error('Error handling system audio chunk:', error);
+        }
+    }
+
+    public stopSystemAudioCapture(): void {
+        console.log('Stopping system audio capture...');
+        
+        if (this.mediaRecorder && this.mediaRecorder.state !== 'inactive') {
+            this.mediaRecorder.stop();
+        }
+        
+        if (this.systemAudioStream) {
+            this.systemAudioStream.getTracks().forEach(track => {
+                track.stop();
+            });
+            this.systemAudioStream = null;
+        }
+        
+        this.mediaRecorder = null;
+        this.isStreamingSystemAudio = false;
+        this.isSender = false;
+        
+        console.log('System audio capture stopped');
+    }
+
+    public isCapturingSystemAudio(): boolean {
+        return this.isStreamingSystemAudio;
+    }
+
     public disconnect(): void {
+        // Stop system audio capture
+        this.stopSystemAudioCapture();
+        
         // Stop any ongoing playback
         if (this.audioBufferSource) {
             try {

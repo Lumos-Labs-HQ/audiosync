@@ -36,23 +36,23 @@ io.on('connection', (socket) => {
   socket.on('audio-chunk', (data) => {
     // Broadcast the audio chunk to the specific room with timestamp
     if (data && data.roomId && data.chunk) {
-      // Always preserve the original timestamp for accurate sync
-      // Only generate a timestamp if one wasn't provided
-      if (!data.timestamp) {
-        data.timestamp = Date.now();
-        console.log(`No timestamp provided, adding server timestamp: ${data.timestamp}`);
-      }
-      
-      console.log(`Broadcasting audio chunk to room ${data.roomId}, size: ${data.chunk.byteLength}, timestamp: ${data.timestamp}`);
-      
-      // Forward the chunk with original timestamp to all others in the room
-      // This keeps the timing intact for synchronization
-      socket.to(data.roomId).emit('audio-chunk', {
-        chunk: data.chunk,
-        timestamp: data.timestamp
-      });
+        // Always preserve the original timestamp for accurate sync
+        if (!data.timestamp) {
+            data.timestamp = Date.now();
+            console.log(`No timestamp provided, adding server timestamp: ${data.timestamp}`);
+        }
+        
+        const audioType = data.isSystemAudio ? 'system' : 'file';
+        console.log(`Broadcasting ${audioType} audio chunk to room ${data.roomId}, size: ${data.chunk.byteLength}, timestamp: ${data.timestamp}`);
+        
+        // Forward the chunk with original timestamp and type flag
+        socket.to(data.roomId).emit('audio-chunk', {
+            chunk: data.chunk,
+            timestamp: data.timestamp,
+            isSystemAudio: data.isSystemAudio || false
+        });
     } else {
-      console.warn('Received invalid audio chunk data:', Object.keys(data || {}));
+        console.warn('Received invalid audio chunk data:', Object.keys(data || {}));
     }
   });
 
@@ -79,7 +79,7 @@ io.on('connection', (socket) => {
 });
 
 
-const port = process.env.PORT || 3001;
+const port = process.env.PORT || 3000;
 server.listen(port, "0.0.0.0", () => {
   console.log(`Socket.IO server running on http://0.0.0.0:${port}`);
   console.log(`Server accessible at http://localhost:${port}`);
