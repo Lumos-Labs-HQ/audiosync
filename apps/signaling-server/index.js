@@ -1,5 +1,11 @@
 const { Server } = require('socket.io');
-const io = new Server({
+const http = require('http');
+
+// Create HTTP server
+const server = http.createServer();
+
+// Create Socket.IO server with the HTTP server
+const io = new Server(server, {
   cors: { origin: '*', methods: ['GET', 'POST'] }
 });
 
@@ -72,6 +78,9 @@ io.on('connection', (socket) => {
   });
 });
 
+
 const port = process.env.PORT || 3001;
-io.listen(port);
-console.log(`Socket.IO server running on port ${port}`);
+server.listen(port, "0.0.0.0", () => {
+  console.log(`Socket.IO server running on http://0.0.0.0:${port}`);
+  console.log(`Server accessible at http://localhost:${port}`);
+});
